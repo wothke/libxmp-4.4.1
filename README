@@ -1,0 +1,43 @@
+/*
+* WebXmp
+* ======
+*
+* 	Copyright (C) 2014 Juergen Wothke
+*
+* Original C code of xmp (see http://xmp.sourceforge.net/).
+*
+* LICENSE
+*
+* This library is free software; you can redistribute it and/or modify it
+* under the terms of the GNU Lesser General Public License as published by
+* the Free Software Foundation; either version 2.1 of the License, or (at
+* your option) any later version. This library is distributed in the hope
+* that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
+* warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+* GNU Lesser General Public License for more details.
+*
+* You should have received a copy of the GNU Lesser General Public
+* License along with this library; if not, write to the Free Software
+* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA
+*/
+
+
+This "project" is based on libxmp (4.3.0): The all the "Web" changes are contained in the "emscripten" subfolder.
+
+The main addition is the new adapter.c file: It encapsulates all those APIs that interface with the 
+JavaScript/Web world. 
+
+
+Howto build:
+
+You'll need Emscripten (I used the win installer on WinXP: emsdk-1.13.0-full-32bit.exe which could be found here: 
+http://kripken.github.io/emscripten-site/docs/getting_started/downloads.html) I did not need to perform 
+ANY additions or manual changes on the installation. The below instructions assume that the libxmp-4.3.0 project 
+folder has been moved into the main emscripten folder (maybe not necessary) and that a command prompt has been 
+opened within the libxmp-4.3.0/emscripten sub-folder, and that the Emscripten environment vars have been set (run emsdk_env.bat).
+
+Running the makeEmscripten.bat will generate a JavaScript 'xmp' library (webXmp.js) including the above mentioned 
+interface APIs. This lib is directly written into the web-page example in the "htdocs" sub-folder. (This generated lib is 
+used from some manually written JavaScript/WebAudio code, see htdocs/sample_player.js). Study the example in "htdocs" 
+for how the player is used.
+

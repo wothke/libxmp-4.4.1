@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<!--
+ WebXmp: HTML5 Audio/JavaScript port of XMP.
+
+ 	Copyright (C) 2014 Juergen Wothke
+
+ Original C code of "XMP" (see http://xmp.sourceforge.net/):
+
+   xmp is a module player for Unix-like systems that plays over 90 mainstream and obscure module formats from Amiga, 
+   Atari, Acorn, Apple IIgs and PC, including Protracker (MOD), Scream Tracker 3 (S3M), Fast Tracker II (XM) and 
+   Impulse Tracker (IT) files.
+
+ Terms of Use: This software is licensed under a CC BY-NC-SA 
+ (http://creativecommons.org/licenses/by-nc-sa/4.0/).
+
+ Credits: The visualization used on this page was strongly "inspired" by <a target="_blank" href="http://html5-demos.appspot.com/static/webaudio/createMediaSourceElement.html">this demo</a>
+
+-->
+
+<html>
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="X-UA-Compatible" content="chrome=1" />
+<title>WebXmp - the xmp music player for the Web</title>
+
+<meta name="description" content="Experimental JavaScript version of XMP">
+<meta name="author" content="Juergen Wothke">
+<meta name="keywords" content="Web Audio API, HTML5, JavaScript, Atari, Acorn, Apple IIgs, PC,  Protracker (MOD), Scream Tracker 3 (S3M), Fast Tracker II (XM), 
+   Impulse Tracker (IT)">
+
+<!--link href="http://fonts.googleapis.com/css?family=Open+Sans:300" rel="stylesheet" type="text/css"-->
+<link href="font.css" rel="stylesheet" type="text/css">
+<link href="common.css" rel="stylesheet" type="text/css">
+<link rel="image_src" href="screenshot.gif" />
+
+
+
+<link rel="icon" href="favicon.ico" type="image/x-icon">
+<link rel="shortcut icon" type="image/x-icon" href="favicon.ico" />
+<link type="image/x-icon" href="favicon.ico" />
+
+<script type="text/javascript" src="webXmp.js"></script>
+<script type="text/javascript" src="sample_player.js"></script>
+
+<script>
+var songs = [
+	'music/external.xm',
+];
+
+var player= new SamplePlayer(doOnEnd);
+
+function doOnEnd(){ audio.playNextSong(); player.isPaused= false; }
+
+// ---------------------------- WebAudio stuff ----------------------------
+
+Audio = function(songs) {
+	this.audioCtx;
+	this.bufferSource;
+	this.gainNode;
+	this.analyzerNode;
+	
+	this.current=-1;
+	this.someSongs= songs;
+};
+
+Audio.prototype = {
+	initialAudioSetup: function() {
+		if (typeof this.bufferSource != 'undefined') { 
+			this.bufferSource.stop(0);
+		} else {
+			this.setupAudioNodes();
+		}
+	},
+	setupAudioNodes: function() {
+		if (typeof this.audioCtx == 'undefined') {
+			try {
+				window.AudioContext = window.AudioContext||window.webkitAudioContext;
+				this.audioCtx = new AudioContext();
+			} catch(e) {
+				alert('Web Audio API is not supported in this browser (get Chrome 18 or Firefox 26)');
+			}
+			this.analyzerNode = this.audioCtx.createAnalyser();
+
+			var scriptNode= player.createScriptProcessor(this.audioCtx);
+			
+			this.gainNode = this.audioCtx.createGain();
+						
+			scriptNode.connect(this.gainNode);
+			this.gainNode.connect(this.analyzerNode);
+			this.analyzerNode.connect(this.audioCtx.destination);
+		}
+	},	
+	playNextSong: function() {
+		this.current= (++this.current >=this.someSongs.length) ? 0 : this.current;
+		var someSong= this.someSongs[this.current];
+		this.playSong(someSong);
+	},
+	playPreviousSong: function() {
+		this.current= (--this.current<0) ? this.current+this.someSongs.length : this.current;
+		var someSong= this.someSongs[this.current];
+		this.playSong(someSong);
+	},
+	playSong: function(someSong) {
+		var xhr = new XMLHttpRequest();
+		xhr.open("GET", someSong, true);
+		xhr.responseType = "arraybuffer";
+
+		xhr.onload = function (oEvent) {
+			player.playSong(xhr.response, 0);
+		
+			this.initialAudioSetup();
+			
+			updateGUI();
+
+			this.startMusicPlayback();
+		}.bind(this);
+		xhr.send(null);
+	},
+	startMusicPlayback: function() {
+		player.isPaused= false;
+
+		if (typeof this.bufferSource === 'undefined') {
+			this.bufferSource = this.audioCtx.createBufferSource();
+			if (!this.bufferSource.start) {
+			  this.bufferSource.start = this.bufferSource.noteOn;
+			  this.bufferSource.stop = this.bufferSource.noteOff;
+			}
+			this.bufferSource.start(0);		
+		}
+	}
+};
+
+// ---------------------    drag&drop feature -----------------------------------
+function allowDrop(ev) {
+    ev.preventDefault();
+}
+function drop(ev) {
+    ev.preventDefault();
+    var data = ev.dataTransfer.getData("Text");
+	var file = ev.dataTransfer.files[0];
+	if (file instanceof File) {
+		var f= window.player['playTmpFile'].bind(window.player);
+		f(file);
+		
+		
+			player.playSong(xhr.response, 0);
+			this.initialAudioSetup();
+			updateGUI();
+			this.startMusicPlayback();
+		
+		
+	}
+}
+// ---------------------------- some visuals ----------------------------
+
+Graphix = function(audio) {
+	this.audio= audio;
+	
+	this.WIDTH= 800;
+	this.HEIGHT= 200;
+	
+	this.canvasSpectrum = document.getElementById('spectrum');
+	this.ctxSpectrum = this.canvasSpectrum.getContext('2d');
+	this.canvasSpectrum.width = this.WIDTH;
+
+	var canvas2 = document.getElementById('logo');
+	this.ctxLegend = canvas2.getContext('2d');
+};
+
+Graphix.prototype = {
+	reqAnimationFrame: function() {
+		window.requestAnimationFrame(this.redrawSpectrum.bind(this));
+	},
+	redrawSpectrum: function() {
+		this.reqAnimationFrame();
+		
+		var freqByteData = new Uint8Array(this.audio.analyzerNode.frequencyBinCount);
+		this.audio.analyzerNode.getByteFrequencyData(freqByteData);
+
+		var SPACER_WIDTH = 10;
+		var BAR_WIDTH = 5;
+		var OFFSET = 100;
+
+		var numBars = Math.round(this.WIDTH / SPACER_WIDTH);
+
+		this.ctxSpectrum.clearRect(0, 0, this.WIDTH, this.HEIGHT);
+
+		this.ctxSpectrum.fillStyle = '#6565e6';
+		this.ctxSpectrum.lineCap = 'round';
+
+		for (var i = 0; i < numBars; ++i) {
+		var magnitude = freqByteData[i + OFFSET]*this.HEIGHT/255;
+			this.ctxSpectrum.fillRect(i * SPACER_WIDTH, this.HEIGHT, BAR_WIDTH, -magnitude);
+		}
+	},
+	text: function(ctx, text, x, y) {
+		ctx.strokeText(text, x, y);
+		ctx.fillText(text, x, y);
+	},
+	redrawSongInfo: function() {
+		this.ctxLegend.clearRect(0, 0, 800, 300);
+		
+		this.ctxLegend.textBaseline = "middle";
+		this.ctxLegend.fillStyle = '#000';
+		this.ctxLegend.strokeStyle = "#FFFFFF";
+		
+		this.ctxLegend.font = '90px serif bold';
+		
+		this.text(this.ctxLegend, "WebXmp", 20, 70);
+		this.ctxLegend.font = '25px sans-serif';
+		this.text(this.ctxLegend, "lets play some music..", 20, 125);
+
+		this.ctxLegend.fillStyle = '#888';
+		this.ctxLegend.font = '25px sans-serif';
+
+		this.ctxLegend.textBaseline = 'bottom';
+		this.text(this.ctxLegend, player.title, 20, 190);
+		this.text(this.ctxLegend, player.player, 20, 230);
+		this.text(this.ctxLegend, "", 20, 270);
+	},
+};
+
+
+function updateGUI() {
+	gfx.reqAnimationFrame();
+	gfx.redrawSongInfo();
+}
+
+function init() {
+	audio= new Audio(songs);
+	gfx= new Graphix(audio);
+
+
+	document.getElementById("previous").onclick = audio.playPreviousSong.bind(audio);
+	document.getElementById("next").onclick = audio.playNextSong.bind(audio);
+			
+	document.getElementById("play").onclick = function(e){
+		player.isPaused= false;
+	};
+	document.getElementById("pause").onclick = function(e){
+		player.isPaused= true;
+	};
+	document.getElementById("gain").onchange = function(e){
+		audio.gainNode.gain.value= this.value/255;
+	};
+
+	audio.playNextSong();
+}
+
+</script>
+
+</head>
+
+<body onload="init();">
+<div class="tooltip" id="tooltip" alt="This is a hobby project, but it costs not only time to regularily maintain this site but also money to pay for the internet service provider (etc). If you want to keep this site up and running.. or if you just like my work (see https://jwothke.wordpress.com/) and you'd like to see more of it in the future, please make a contribution. Thank you!">
+<form action="https://www.paypal.com/cgi-bin/webscr" method="post" target="_blank">
+<input type="hidden" name="cmd" value="_s-xclick">
+<input type="hidden" name="hosted_button_id" value="E7ACAHA7W5FYC">
+<input type="image" src="btn_donate_LG.gif" border="0" name="submit" alt="PayPal - The safer, easier way to pay online!">
+<img alt="" border="0" src="pixel.gif" width="1" height="1">
+</form>
+</div>
+
+<details>
+  <summary>What's this?</summary>
+  <div>
+ <p>
+    WebXmp: Experimental JavaScript/HTML5 version of <a href="http://xmp.sourceforge.net/" target="_blank">xmp</a>. (Xmp is a module player that plays over 90 mainstream and obscure module formats from Amiga, 
+   Atari, Acorn, Apple IIgs and PC, including Protracker (MOD), Scream Tracker 3 (S3M), Fast Tracker II (XM) and 
+   Impulse Tracker (IT) files.)
+ </p>
+ 
+  <p>2014 by Juergen Wothke</p>
+ 
+  <p>This page does not use any plugins but is based exclusively on the draft version Web Audio API. 
+  You'll need Chrome or Firefox to make it play the music. The visual effects 
+  work best in Chrome. (If Firefox passes out - press 'reload'... it's experimental.)
+  
+  <p>Contrarry to most other HTML5 based pages out there, the music here is NOT based on  
+  OscillatorNode based waveforms or the playback of some sampledata file. Instead the samples here 
+  are completely calculated within JavaScript by running the xmp emulator logic. (My similar player for C64 music can be found <a target="_blank" href="www.wothke.ch/experimental/TinyJsSid.html">here</a>.)</p>
+  
+ <p>Please use controls on the right (e.g. to play another song): 
+<button id="play"> &gt;</button>
+<button id="pause"> ||</button>
+<button id="previous"> |&lt;&lt;</button>
+<button id="next"> &gt;&gt;|</button>
+<input type="range" id="gain" name="gain" min="1" max="255" value="255">
+
+ </div>
+</details>
+<aside>
+  
+</aside>
+
+<section>
+  <div>
+	<canvas id="logo" class="logo" width="600" height="190"></canvas>
+    <canvas id="spectrum" class="spectrum" width="512" height="200"></canvas>
+  </div>
+  <div id="drop" class="drop" ondrop="drop(event)" ondragover="allowDrop(event)">
+ <img src="target.gif" width=200 height=200/>
+  </div>
+
+</section>
+
+</body>
+</html>
