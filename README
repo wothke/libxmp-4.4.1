@@ -21,8 +21,10 @@
 * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA
 */
 
+This is a JavaScript/WebAudio plugin of XMP. This plugin is designed to work with version 1.0 of my 
+generic WebAudio ScriptProcessor music player (see separate project). 
 
-This "project" is based on libxmp (4.3.0): all the "Web" changes are contained in the "emscripten" subfolder.
+This "project" is based on libxmp (4.3.0): The all the "Web" changes are contained in the "emscripten" subfolder.
 
 The main addition is the new adapter.c file: It encapsulates all those APIs that interface with the 
 JavaScript/Web world. 
@@ -33,11 +35,9 @@ Howto build:
 You'll need Emscripten (I used the win installer on WinXP: emsdk-1.13.0-full-32bit.exe which could be found here: 
 http://kripken.github.io/emscripten-site/docs/getting_started/downloads.html) I did not need to perform 
 ANY additions or manual changes on the installation. The below instructions assume that the libxmp-4.3.0 project 
-folder has been moved into the main emscripten folder (which maybe not be necessary) and that a command prompt has been 
+folder has been moved into the main emscripten folder (maybe not necessary) and that a command prompt has been 
 opened within the libxmp-4.3.0/emscripten sub-folder, and that the Emscripten environment vars have been set (run emsdk_env.bat).
 
-Running the makeEmscripten.bat will generate a JavaScript 'xmp' library (webXmp.js) including the above mentioned 
-interface APIs. This lib is directly written into the web-page example in the "htdocs" sub-folder. (This generated lib is 
-used from some manually written JavaScript/WebAudio code, see htdocs/sample_player.js). Study the example in "htdocs" 
-to see how the player is used.
-
+Running the makeEmscripten.bat will generate a JavaScript 'xmp' library (backend_xmp.js). This lib is directly written 
+into the web-page example in the "htdocs" sub-folder. Study the example in "htdocs" for how the player is used.
+A running example can be found here: http://www.wothke.ch/webxmp
