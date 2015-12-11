@@ -58,7 +58,7 @@ XMPBackendAdapter = (function(){ var $this = function () {
 		registerFileData: function(pathFilenameArray, data) {
 			return 0;	// not used in XMP
 		},
-		loadMusicData: function(sampleRate, path, filename, data) {
+		loadMusicData: function(sampleRate, path, filename, data, options) {
 			var buf = this.Module._malloc(data.length);
 			this.Module.HEAPU8.set(data, buf);
 			var ret = this.Module.ccall('loadXmpModule', 'number', ['number', 'number', 'number'], [buf, data.length, sampleRate]);
