@@ -77,7 +77,7 @@ SongDisplay = function(displayAccessor, colors, barType, cpuLimit, doAnimate) {
 	
 	this.canvasSpectrum = document.getElementById('spectrumCanvas');
 	this.ctxSpectrum = this.canvasSpectrum.getContext('2d');
-	this.canvasSpectrum.width = this.WIDTH;
+	this.canvasSpectrum.width = this.WIDTH;	// redundant..
 
 	this.mozReflectSpectrum = document.getElementById('moz-reflect-spectrum');
 	this.mozReflectLogo = document.getElementById('moz-reflect-logo');
@@ -131,6 +131,12 @@ SongDisplay.prototype = {
 			
 			var numBars = Math.round(this.WIDTH / this.barSpacing);
 
+			if(typeof this.caps === 'undefined') {
+				this.caps= new Array(numBars);
+				this.decayRate= 0.99;
+				for (var i= 0; i<numBars; i++) this.caps[i]= 0;
+			}
+			
 			this.ctxSpectrum.clearRect(0, 0, this.WIDTH, this.HEIGHT);
 
 			this.ctxSpectrum.lineCap = 'round';
@@ -164,6 +170,12 @@ SongDisplay.prototype = {
 						this.ctxSpectrum.fillStyle = this.colorGradient(this.colors,i/numBars);
 						var magnitude = freqByteData[i + OFFSET]*this.HEIGHT/255;
 						this.ctxSpectrum.fillRect(i * this.barSpacing, this.HEIGHT, this.barWidth, -magnitude);
+						
+						this.ctxSpectrum.fillStyle= "#b75b4e";
+						var d= this.caps[i]*this.decayRate;
+						this.caps[i]= Math.max(d, magnitude);
+						
+						this.ctxSpectrum.fillRect(i * this.barSpacing, this.HEIGHT-this.caps[i], this.barWidth, 3);				
 					}		
 				}
 			} else {
@@ -200,11 +212,17 @@ SongDisplay.prototype = {
 		}		
 		this.lastRenderTime= new Date().getTime()-this.lastRenderTime;
 	},
-	text: function(ctx, text, x, y) {
-		if(typeof text === 'undefined')
+	text: function(ctx, t, x, y) {
+		if(typeof t === 'undefined')
 			return;
-		ctx.strokeText(text, x, y);
-		ctx.fillText(text, x, y);
+				
+		t = t.replace(/&#.*?;/g, function (needle) {	// replace html chars "&#111;"
+			return String.fromCharCode( parseInt(needle.substring(2, needle.length-1)));
+		}.bind(this));
+
+		
+		ctx.strokeText(t, x, y);
+		ctx.fillText(t, x, y);
 	},
 	redrawSongInfo: function() {
 		this.reqAnimationFrame();	// start the animation going
@@ -215,7 +233,8 @@ SongDisplay.prototype = {
 		this.ctxLegend.fillStyle = '#000';
 		this.ctxLegend.strokeStyle = "#FFFFFF";
 		
-		this.ctxLegend.font = '90px serif bold';
+//		this.ctxLegend.font = '90px serif bold';
+		this.ctxLegend.font = '90px serif';	// for some reason the Chrome idiots removed support for "bold"
 		
 		this.text(this.ctxLegend, this.displayAccessor.getDisplayTitle(), 20, 70);
 		

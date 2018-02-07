@@ -38,7 +38,8 @@ body {
   font-weight: 300;
   -webkit-font-smoothing: antialiased;
   padding: 2em;
-  background: -webkit-gradient(radial, center center, 500, center center, 1400, from(rgba(0,0,0,0)), to(rgba(0,0,0,0.6))) #fff;
+
+	background: -webkit-gradient(radial, center center, 500, center center, 1400, from(rgba(0,0,0,0)), to(rgba(0,0,0,0.6))) #fff;
   background: -moz-radial-gradient(farthest-side, rgba(0,0,0,0) 90%, rgba(0,0,0,0.2) 150%) #fff;
   background: -webkit-radial-gradient(farthest-side, rgba(0,0,0,0) 90%, rgba(0,0,0,0.2) 150%) #fff;
   background: -ms-radial-gradient(farthest-side, rgba(0,0,0,0) 90%, rgba(0,0,0,0.2) 150%) #fff;
@@ -164,7 +165,7 @@ html, body {
 body > section {
   display: -webkit-flex;
   display: flex;
-  
+
   -webkit-flex-direction: column;
   flex-direction: column;
   -webkit-justify-content: center;
