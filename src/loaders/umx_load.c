@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 #include "loader.h"
@@ -15,15 +29,15 @@
 #define MAGIC_SCRM	MAGIC4('S','C','R','M')
 #define MAGIC_M_K_	MAGIC4('M','.','K','.')
 
-extern const struct format_loader xm_loader;
-extern const struct format_loader it_loader;
-extern const struct format_loader s3m_loader;
-extern const struct format_loader mod_loader;
+extern const struct format_loader libxmp_loader_xm;
+extern const struct format_loader libxmp_loader_it;
+extern const struct format_loader libxmp_loader_s3m;
+extern const struct format_loader libxmp_loader_mod;
 
 static int umx_test (HIO_HANDLE *, char *, const int);
 static int umx_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader umx_loader = {
+const struct format_loader libxmp_loader_umx = {
 	"Epic Games UMX",
 	umx_test,
 	umx_load
@@ -85,17 +99,35 @@ static int umx_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	for (i = 0; i < TEST_SIZE; i++, b++) {
 		id = readmem32b(b);
 
-		if (!memcmp(b, "Extended Module:", 16))
-			return xm_loader.loader(m, f, i);
+		if (!memcmp(b, "Extended Module:", 16)) {
+			if (hio_seek(f, i, SEEK_SET) < 0) {
+				return -1;
+			}
+			return libxmp_loader_xm.loader(m, f, i);
+		}
 
-		if (id == MAGIC_IMPM)
-			return it_loader.loader(m, f, i);
+		if (id == MAGIC_IMPM) {
+			if (hio_seek(f, i, SEEK_SET) < 0) {
+				return -1;
+			}
+			return libxmp_loader_it.loader(m, f, i);
+		}
 
-		if (i > 44 && id == MAGIC_SCRM)
-			return s3m_loader.loader(m, f, i - 44);
+		if (i > 44 && id == MAGIC_SCRM) {
+			i -= 44;
+			if (hio_seek(f, i, SEEK_SET) < 0) {
+				return -1;
+			}
+			return libxmp_loader_s3m.loader(m, f, i);
+		}
 
-		if (i > 1080 && id == MAGIC_M_K_)
-			return mod_loader.loader(m, f, i - 1080);
+		if (i > 1080 && id == MAGIC_M_K_) {
+			i -= 1080;
+			if (hio_seek(f, i, SEEK_SET) < 0) {
+				return -1;
+			}
+			return libxmp_loader_mod.loader(m, f, i);
+		}
 	}
 	
 	return -1;

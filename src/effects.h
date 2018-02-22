@@ -32,6 +32,7 @@
 #define FX_XF_PORTA	0x21
 
 /* Protracker extended effects */
+#define EX_FILTER	0x00
 #define EX_F_PORTA_UP	0x01
 #define EX_F_PORTA_DN	0x02
 #define EX_GLISS	0x03
@@ -39,6 +40,7 @@
 #define EX_FINETUNE	0x05
 #define EX_PATTERN_LOOP	0x06
 #define EX_TREMOLO_WF	0x07
+#define EX_SETPAN	0x08
 #define EX_RETRIG	0x09
 #define EX_F_VSLIDE_UP	0x0a
 #define EX_F_VSLIDE_DN	0x0b
@@ -57,7 +59,7 @@
 #define FX_F_NSLIDE_DN	0x75
 #define FX_F_NSLIDE_UP	0x76
 
-/* Persistent effects -- for 669, FNK and FAR */
+/* Persistent effects -- for FNK and FAR */
 #define FX_PER_PORTA_DN	0x78
 #define FX_PER_PORTA_UP	0x79
 #define FX_PER_TPORTA	0x7a
@@ -66,6 +68,13 @@
 #define FX_PER_VSLD_DN	0x7d
 #define FX_SPEED_CP	0x7e
 #define FX_PER_CANCEL	0x7f
+
+/* 669 frequency based effects */
+#define FX_669_PORTA_UP	0x60
+#define FX_669_PORTA_DN	0x61
+#define FX_669_TPORTA	0x62
+#define FX_669_FINETUNE	0x63
+#define FX_669_VIBRATO	0x64
 #endif
 
 #ifndef LIBXMP_CORE_DISABLE_IT
@@ -81,6 +90,8 @@
 #define FX_IT_PANSLIDE	0x89
 #define FX_PANBRELLO	0x8a
 #define FX_PANBRELLO_WF	0x8b
+#define FX_HIOFFSET	0x8c
+#define FX_IT_BREAK	0x8e	/* like FX_BREAK with hex parameter */
 #endif
 
 #ifndef LIBXMP_CORE_PLAYER
@@ -100,11 +111,17 @@
 #define FX_VOLSLIDE_DN	0xa1
 #define FX_F_VSLIDE	0xa5	/* IMF/MDL */
 #define FX_CHORUS	0xa9	/* IMF */
+#define FX_ICE_SPEED	0xa2
 #define FX_REVERB	0xaa	/* IMF */
 #define FX_MED_HOLD	0xb1	/* MMD hold/decay */
 #define FX_MEGAARP	0xb2	/* Smaksak effect 7: MegaArp */
+#define FX_VOL_ADD	0xb6	/* SFX change volume up */
+#define FX_VOL_SUB	0xb7	/* SFX change volume down */
+#define FX_PITCH_ADD	0xb8	/* SFX add steps to current note */
+#define FX_PITCH_SUB	0xb9	/* SFX add steps to current note */
 #endif
 
+#define FX_SURROUND	0x8d	/* S3M/IT */
 #define FX_S3M_SPEED	0xa3	/* S3M */
 #define FX_VOLSLIDE_2	0xa4
 #define FX_FINETUNE	0xa6
@@ -116,5 +133,11 @@
 #define FX_F_PORTA_DN	0xb0	/* MMD */
 #define FX_PATT_DELAY	0xb3	/* MMD */
 #define FX_S3M_ARPEGGIO	0xb4
+#define FX_PANSL_NOMEM	0xb5	/* XM volume column */
+
+#define FX_VSLIDE_UP_2	0xc0	/* IT volume column volume slide */
+#define FX_VSLIDE_DN_2	0xc1
+#define FX_F_VSLIDE_UP_2 0xc2
+#define FX_F_VSLIDE_DN_2 0xc3
 
 #endif /* LIBXMP_EFFECTS_H */

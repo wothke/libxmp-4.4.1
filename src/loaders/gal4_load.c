@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -34,7 +34,7 @@
 static int gal4_test(HIO_HANDLE *, char *, const int);
 static int gal4_load(struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader gal4_loader = {
+const struct format_loader libxmp_loader_gal4 = {
 	"Galaxy Music System 4.0",
 	gal4_test,
 	gal4_load
@@ -54,7 +54,7 @@ static int gal4_test(HIO_HANDLE *f, char *t, const int start)
 		return -1;
 
 	hio_read32b(f);		/* skip size */
-	read_title(f, t, 64);
+	libxmp_read_title(f, t, 64);
 
 	return 0;
 }
@@ -70,18 +70,23 @@ static int get_main(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	int flags;
 	
 	hio_read(buf, 1, 64, f);
-	strncpy(mod->name, buf, 64);
-	set_type(m, "Galaxy Music System 4.0");
+	strncpy(mod->name, buf, 63);	/* ensure string terminator */
+	libxmp_set_type(m, "Galaxy Music System 4.0");
 
 	flags = hio_read8(f);
 	if (~flags & 0x01)
-		m->quirk = QUIRK_LINEAR;
+		m->period_type = PERIOD_LINEAR;
 	mod->chn = hio_read8(f);
 	mod->spd = hio_read8(f);
 	mod->bpm = hio_read8(f);
 	hio_read16l(f);		/* unknown - 0x01c5 */
 	hio_read16l(f);		/* unknown - 0xff00 */
 	hio_read8(f);		/* unknown - 0x80 */
+
+	/* Sanity check */
+	if (mod->chn > 32) {
+		return -1;
+	}
 
 	return 0;
 }
@@ -91,10 +96,14 @@ static int get_ordr(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	struct xmp_module *mod = &m->mod;
 	int i;
 
-	mod->len = hio_read8(f);
+	mod->len = hio_read8(f) + 1;
+	if (hio_error(f)) {
+		return -1;
+	}
 
-	for (i = 0; i < mod->len; i++)
+	for (i = 0; i < mod->len; i++) {
 		mod->xxo[i] = hio_read8(f);
+	}
 
 	return 0;
 }
@@ -141,9 +150,14 @@ static int get_patt(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	i = hio_read8(f);	/* pattern number */
 	len = hio_read32l(f);
 	
+	/* Sanity check */
+	if (i >= mod->pat || len <= 0) {
+		return -1;
+	}
+
 	rows = hio_read8(f) + 1;
 
-	if (pattern_tracks_alloc(mod, i, rows) < 0)
+	if (libxmp_alloc_pattern_tracks(mod, i, rows) < 0)
 		return -1;
 
 	for (r = 0; r < rows; ) {
@@ -205,8 +219,6 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	i = hio_read8(f);		/* instrument number */
 
 	hio_read(&mod->xxi[i].name, 1, 28, f);
-	adjust_string((char *)mod->xxi[i].name);
-
 	mod->xxi[i].nsm = hio_read8(f);
 
 	for (j = 0; j < 108; j++) {
@@ -218,7 +230,7 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	vsw = hio_read8(f);			/* vibrato sweep */
 	hio_read8(f);			/* unknown */
 	hio_read8(f);			/* unknown */
-	vde = hio_read8(f) / 4;		/* vibrato depth */
+	vde = hio_read8(f);		/* vibrato depth */
 	vra = hio_read16l(f) / 16;		/* vibrato speed */
 	hio_read8(f);			/* unknown */
 
@@ -278,7 +290,7 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	if (mod->xxi[i].nsm == 0)
 		return 0;
 
-	if (subinstrument_alloc(mod, i, mod->xxi[i].nsm) < 0)
+	if (libxmp_alloc_subinstrument(mod, i, mod->xxi[i].nsm) < 0)
 		return -1;
 
 	for (j = 0; j < mod->xxi[i].nsm; j++, data->snum++) {
@@ -286,7 +298,6 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 		hio_read32b(f);	/* size */
 	
 		hio_read(&mod->xxs[data->snum].name, 1, 28, f);
-		adjust_string((char *)mod->xxs[data->snum].name);
 	
 		mod->xxi[i].sub[j].pan = hio_read8(f) * 4;
 		if (mod->xxi[i].sub[j].pan == 0)	/* not sure about this */
@@ -318,7 +329,7 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	
 		srate = hio_read32l(f);
 		finetune = 0;
-		c2spd_to_note(srate, &mod->xxi[i].sub[j].xpo, &mod->xxi[i].sub[j].fin);
+		libxmp_c2spd_to_note(srate, &mod->xxi[i].sub[j].xpo, &mod->xxi[i].sub[j].fin);
 		mod->xxi[i].sub[j].fin += finetune;
 	
 		hio_read32l(f);			/* 0x00000000 */
@@ -337,7 +348,7 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	
 		if (mod->xxs[data->snum].len > 1) {
 			int snum = data->snum;
-			if (load_sample(m, f, 0, &mod->xxs[snum], NULL) < 0)
+			if (libxmp_load_sample(m, f, 0, &mod->xxs[snum], NULL) < 0)
 				return -1;
 		}
 	}
@@ -362,38 +373,40 @@ static int gal4_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	mod->smp = mod->ins = 0;
 
-	handle = iff_new();
+	handle = libxmp_iff_new();
 	if (handle == NULL)
 		return -1;
 
+	m->c4rate = C4_NTSC_RATE;
+
 	/* IFF chunk IDs */
-	ret = iff_register(handle, "MAIN", get_main);
-	ret |= iff_register(handle, "ORDR", get_ordr);
-	ret |= iff_register(handle, "PATT", get_patt_cnt);
-	ret |= iff_register(handle, "INST", get_inst_cnt);
+	ret = libxmp_iff_register(handle, "MAIN", get_main);
+	ret |= libxmp_iff_register(handle, "ORDR", get_ordr);
+	ret |= libxmp_iff_register(handle, "PATT", get_patt_cnt);
+	ret |= libxmp_iff_register(handle, "INST", get_inst_cnt);
 
 	if (ret != 0)
 		return -1;
 
-	iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
-	iff_set_quirk(handle, IFF_CHUNK_TRUNC4);
+	libxmp_iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
+	libxmp_iff_set_quirk(handle, IFF_CHUNK_TRUNC4);
 
 	/* Load IFF chunks */
-	if (iff_load(handle, m, f, &data) < 0) {
-		iff_release(handle);
+	if (libxmp_iff_load(handle, m, f, &data) < 0) {
+		libxmp_iff_release(handle);
 		return -1;
 	}
 
-	iff_release(handle);
+	libxmp_iff_release(handle);
 
 	mod->trk = mod->pat * mod->chn;
 
 	MODULE_INFO();
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	D_(D_INFO "Stored patterns: %d\n", mod->pat);
@@ -402,30 +415,40 @@ static int gal4_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	hio_seek(f, start + offset, SEEK_SET);
 	data.snum = 0;
 
-	handle = iff_new();
+	handle = libxmp_iff_new();
 	if (handle == NULL)
 		return -1;
 
 	/* IFF chunk IDs */
-	ret = iff_register(handle, "PATT", get_patt);
-	ret |= iff_register(handle, "INST", get_inst);
+	ret = libxmp_iff_register(handle, "PATT", get_patt);
+	ret |= libxmp_iff_register(handle, "INST", get_inst);
 
 	if (ret != 0)
 		return -1;
 
-	iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
-	iff_set_quirk(handle, IFF_CHUNK_TRUNC4);
+	libxmp_iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
+	libxmp_iff_set_quirk(handle, IFF_CHUNK_TRUNC4);
 
 	/* Load IFF chunks */
-	if (iff_load(handle, m, f, &data) < 0) {
-		iff_release(handle);
+	if (libxmp_iff_load(handle, m, f, &data) < 0) {
+		libxmp_iff_release(handle);
 		return -1;
 	}
 
-	iff_release(handle);
+	libxmp_iff_release(handle);
 
-	for (i = 0; i < mod->chn; i++)
+	/* Alloc missing patterns */
+	for (i = 0; i < mod->pat; i++) {
+		if (mod->xxp[i] == NULL) {
+			if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0) {
+				return -1;
+			}
+		}
+	}
+
+	for (i = 0; i < mod->chn; i++) {
 		mod->xxc[i].pan = 0x80;
+	}
 
 	m->quirk |= QUIRKS_FT2;
 	m->read_event_type = READ_EVENT_FT2;

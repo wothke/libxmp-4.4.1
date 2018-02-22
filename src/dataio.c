@@ -1,5 +1,5 @@
-/* Extended Module Player core player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -20,83 +20,140 @@
  * THE SOFTWARE.
  */
 
+#include <errno.h>
 #include "common.h"
 
 
-inline uint8 read8(FILE *f)
+#define read_byte(x) do {		\
+	(x) = fgetc(f);			\
+	if ((x) < 0)  goto error;	\
+} while (0)
+
+#define set_error(x) do {		\
+	if (err != NULL) *err = (x);	\
+} while (0)
+
+
+uint8 read8(FILE *f, int *err)
 {
-	return (uint8)fgetc(f);
+	int a;
+
+	read_byte(a);
+	set_error(0);
+	return a;
+
+   error:
+	set_error(ferror(f) ? errno : EOF);
+	return 0xff;
 }
 
-int8 read8s(FILE *f)
+int8 read8s(FILE *f, int *err)
 {
-	return (int8)fgetc(f);
+	int a;
+
+	read_byte(a);
+	set_error(0);
+	return (int8)a;
+
+   error:
+	set_error(ferror(f) ? errno : EOF);
+	return 0;
 }
 
-uint16 read16l(FILE *f)
+uint16 read16l(FILE *f, int *err)
 {
-	uint32 a, b;
+	int a, b;
 
-	a = read8(f);
-	b = read8(f);
+	read_byte(a);
+	read_byte(b);
 
-	return (b << 8) | a;
+	set_error(0);
+	return ((uint16)b << 8) | a;
+
+    error:
+	set_error(ferror(f) ? errno : EOF);
+	return 0xffff;
 }
 
-uint16 read16b(FILE *f)
+uint16 read16b(FILE *f, int *err)
 {
-	uint32 a, b;
+	int a, b;
 
-	a = read8(f);
-	b = read8(f);
+	read_byte(a);
+	read_byte(b);
 
+	set_error(0);
 	return (a << 8) | b;
+
+    error:
+	set_error(ferror(f) ? errno : EOF);
+	return 0xffff;
 }
 
-uint32 read24l(FILE *f)
+uint32 read24l(FILE *f, int *err)
 {
-	uint32 a, b, c;
+	int a, b, c;
 
-	a = read8(f);
-	b = read8(f);
-	c = read8(f);
-
+	read_byte(a);
+	read_byte(b);
+	read_byte(c);
+	
+	set_error(0);
 	return (c << 16) | (b << 8) | a;
+
+    error:
+	set_error(ferror(f) ? errno : EOF);
+	return 0xffffff;
 }
 
-uint32 read24b(FILE *f)
+uint32 read24b(FILE *f, int *err)
 {
-	uint32 a, b, c;
+	int a, b, c;
 
-	a = read8(f);
-	b = read8(f);
-	c = read8(f);
-
+	read_byte(a);
+	read_byte(b);
+	read_byte(c);
+	
+	set_error(0);
 	return (a << 16) | (b << 8) | c;
+
+    error:
+	set_error(ferror(f) ? errno : EOF);
+	return 0xffffff;
 }
 
-uint32 read32l(FILE *f)
+uint32 read32l(FILE *f, int *err)
 {
-	uint32 a, b, c, d;
+	int a, b, c, d;
 
-	a = read8(f);
-	b = read8(f);
-	c = read8(f);
-	d = read8(f);
+	read_byte(a);
+	read_byte(b);
+	read_byte(c);
+	read_byte(d);
 
+	set_error(0);
 	return (d << 24) | (c << 16) | (b << 8) | a;
+
+    error:
+	set_error(ferror(f) ? errno : EOF);
+	return 0xffffffff;
 }
 
-uint32 read32b(FILE *f)
+uint32 read32b(FILE *f, int *err)
 {
-	uint32 a, b, c, d;
+	int a, b, c, d;
 
-	a = read8(f);
-	b = read8(f);
-	c = read8(f);
-	d = read8(f);
+	read_byte(a);
+	read_byte(b);
+	read_byte(c);
+	read_byte(d);
 
+	set_error(0);
 	return (a << 24) | (b << 16) | (c << 8) | d;
+
+    error:
+	set_error(ferror(f) ? errno : EOF);
+	return 0xffffffff;
 }
 
 uint16 readmem16l(uint8 *m)

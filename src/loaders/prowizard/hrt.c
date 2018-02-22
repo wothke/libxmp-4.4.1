@@ -1,6 +1,7 @@
 /*
  * Hornet_Packer.c Copyright (C) 1997 Asle / ReDoX
- * xmp version Copyright (C) 2009 Claudio Matsuoka
+ *
+ * Modified in 2009,2014 by Claudio Matsuoka
  */
 
 #include <string.h>
@@ -8,7 +9,7 @@
 #include "prowiz.h"
 
 
-static int depack_hrt(FILE *in, FILE *out)
+static int depack_hrt(HIO_HANDLE *in, FILE *out)
 {
 	uint8 buf[1024];
 	uint8 c1, c2, c3, c4;
@@ -18,7 +19,7 @@ static int depack_hrt(FILE *in, FILE *out)
 
 	memset(buf, 0, 950);
 
-	fread(buf, 950, 1, in);			/* read header */
+	hio_read(buf, 950, 1, in);			/* read header */
 	for (i = 0; i < 31; i++)		/* erase addresses */
 		*(uint32 *)(buf + 38 + 30 * i) = 0;
 	fwrite(buf, 950, 1, out);		/* write header */
@@ -26,10 +27,10 @@ static int depack_hrt(FILE *in, FILE *out)
 	for (i = 0; i < 31; i++)		/* samples size */
 		ssize += readmem16b(buf + 42 + 30 * i) * 2;
 
-	write8(out, len = read8(in));		/* song length */
-	write8(out, read8(in));			/* nst byte */
+	write8(out, len = hio_read8(in));		/* song length */
+	write8(out, hio_read8(in));			/* nst byte */
 
-	fread(buf, 1, 128, in);			/* pattern list */
+	hio_read(buf, 1, 128, in);			/* pattern list */
 
 	npat = 0;				/* number of patterns */
 	for (i = 0; i < 128; i++) {
@@ -41,13 +42,13 @@ static int depack_hrt(FILE *in, FILE *out)
 	write32b(out, PW_MOD_MAGIC);		/* write ptk ID */
 
 	/* pattern data */
-	fseek(in, 1084, SEEK_SET);
+	hio_seek(in, 1084, SEEK_SET);
 	for (i = 0; i < npat; i++) {
 		for (j = 0; j < 256; j++) {
-			buf[0] = read8(in);
-			buf[1] = read8(in);
-			buf[2] = read8(in);
-			buf[3] = read8(in);
+			buf[0] = hio_read8(in);
+			buf[1] = hio_read8(in);
+			buf[2] = hio_read8(in);
+			buf[3] = hio_read8(in);
 
 			buf[0] /= 2;
 			c1 = buf[0] & 0xf0;
@@ -78,7 +79,6 @@ static int depack_hrt(FILE *in, FILE *out)
 static int test_hrt(uint8 *data, char *t, int s)
 {
 	int i;
-	int start = 0;
 
 	PW_REQUEST_DATA(s, 1084);
 
@@ -86,14 +86,15 @@ static int test_hrt(uint8 *data, char *t, int s)
 		return -1;
 
 	for (i = 0; i < 31; i++) {
+		uint8 *d = data + 20 + i * 30;
+
 		/* test finetune */
-		if (data[start + 20 + i * 30 + 24] > 0x0f)
+		if (d[24] > 0x0f)
 			return -1;
 
 		/* test volume */
-		if (data[start + 20 + i * 30 + 25] > 0x40)
+		if (d[25] > 0x40)
 			return -1;
-		
 	}
 
 	pw_read_title(data, t, 20);

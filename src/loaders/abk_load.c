@@ -1,11 +1,24 @@
 /* Extended Module Player
  * AMOS/STOS Music Bank Loader
- *
  * Copyright (C) 2014 Stephen J Leary and Claudio Matsuoka
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU General Public License. See doc/COPYING
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -14,13 +27,12 @@
 
 #include <ctype.h>
 
+#include "loader.h"
 #include "effects.h"
 #include "period.h"
-#include "loader.h"
 
 #define AMOS_BANK 0x416d426b
 #define AMOS_MUSIC_TYPE 0x0003
-#define AMOS_MUSIC_TEXT 0x4D75736963202020
 #define AMOS_MAIN_HEADER 0x14L
 #define AMOS_STRING_LEN 0x10
 #define AMOS_BASE_FREQ 8192
@@ -30,7 +42,7 @@
 static int abk_test (HIO_HANDLE *, char *, const int);
 static int abk_load (struct module_data *, HIO_HANDLE *, const int);
 
-struct format_loader abk_loader =
+struct format_loader libxmp_loader_abk =
 {
     "AMOS Music Bank",
     abk_test,
@@ -87,17 +99,6 @@ struct abk_instrument
 };
 
 
-static void free_abk_playlist(struct abk_playlist *playlist)
-{
-    if (playlist->pattern != NULL)
-    {
-        free(playlist->pattern);
-    }
-
-    playlist->length = 0;
-}
-
-
 /**
  * @brief read the ABK playlist out from the file stream. This method malloc's some memory for the playlist
  * and can realloc if the playlist is very long.
@@ -143,7 +144,7 @@ static int read_abk_song(HIO_HANDLE *f, struct abk_song *song, uint32 songs_sect
     int i;
     uint32 song_section;
 
-    /* move to the start of the songs data sectio */
+    /* move to the start of the songs data section */
     hio_seek(f, songs_section_offset, SEEK_SET);
 
     if (hio_read16b(f) != 1)
@@ -155,7 +156,9 @@ static int read_abk_song(HIO_HANDLE *f, struct abk_song *song, uint32 songs_sect
 
     song_section = hio_read32b(f);
 
-    hio_seek(f, songs_section_offset + song_section, SEEK_SET);
+    if (hio_seek(f, songs_section_offset + song_section, SEEK_SET) < 0) {
+        return -1;
+    }
 
     for (i=0; i<AMOS_ABK_CHANNELS; i++)
     {
@@ -167,7 +170,9 @@ static int read_abk_song(HIO_HANDLE *f, struct abk_song *song, uint32 songs_sect
     /* unused. just progress the file pointer forward */
     (void) hio_read16b(f);
 
-    hio_read(song->song_name, 1, AMOS_STRING_LEN, f);
+    if (hio_read(song->song_name, 1, AMOS_STRING_LEN, f) != AMOS_STRING_LEN) {
+        return -1;
+    }
 
     return 0;
 }
@@ -179,7 +184,7 @@ static int read_abk_song(HIO_HANDLE *f, struct abk_song *song, uint32 songs_sect
  * @param pattern_offset_abs the absolute file offset to the start of the patter to read.
  * @return returns the size of the pattern.
  */
-static uint16 read_abk_pattern(HIO_HANDLE *f, struct xmp_event *events, uint32 pattern_offset_abs)
+static int read_abk_pattern(HIO_HANDLE *f, struct xmp_event *events, uint32 pattern_offset_abs)
 {
     uint8 position;
     uint8 command;
@@ -192,8 +197,10 @@ static uint16 read_abk_pattern(HIO_HANDLE *f, struct xmp_event *events, uint32 p
     uint16 delay;
     uint16 patdata;
 
-    uint32 storepos;
-    storepos = hio_tell(f);
+    int storepos;
+    if ((storepos = hio_tell(f)) < 0) {
+        return -1;
+    }
 
     /* count how many abk positions are used in this pattern */
     position = 0;
@@ -306,9 +313,13 @@ static uint16 read_abk_pattern(HIO_HANDLE *f, struct xmp_event *events, uint32 p
                 jumped = 1;
                 break;
             default:
+#if 0
                 /* write out an error for any unprocessed commands.*/
                 D_(D_WARN "ABK UNPROCESSED COMMAND: %x,%x\n", command, param);
                 break;
+#else
+		return -1;
+#endif
             }
         }
         else
@@ -332,7 +343,7 @@ static uint16 read_abk_pattern(HIO_HANDLE *f, struct xmp_event *events, uint32 p
                 if (patdata != 0)
                 {
                     /* convert the note from amiga period format to xmp's internal format.*/
-                    events[position].note = period_to_note(patdata & 0x0fff);
+                    events[position].note = libxmp_period_to_note(patdata & 0x0fff);
                     events[position].ins = inst;
                 }
 
@@ -345,7 +356,7 @@ static uint16 read_abk_pattern(HIO_HANDLE *f, struct xmp_event *events, uint32 p
             else /* new note format */
             {
                 /* convert the note from amiga period format to xmp's internal format.*/
-                events[position].note = period_to_note(patdata & 0x0fff);
+                events[position].note = libxmp_period_to_note(patdata & 0x0fff);
                 events[position].ins = inst;
             }
         }
@@ -393,7 +404,10 @@ static struct abk_instrument* read_abk_insts(HIO_HANDLE *f, uint32 inst_section_
             inst[i].sample_length = sampleLength;
         }
     
-        hio_read(inst[i].sample_name, 1, 16, f);
+        if (hio_read(inst[i].sample_name, 1, 16, f) != 16) {
+            free(inst);
+            return NULL;
+	}
     }
 
     return inst;
@@ -401,7 +415,7 @@ static struct abk_instrument* read_abk_insts(HIO_HANDLE *f, uint32 inst_section_
 
 static int abk_test(HIO_HANDLE *f, char *t, const int start)
 {
-    uint64 music;
+    char music[8];
 
     if (hio_read32b(f) != AMOS_BANK)
     {
@@ -416,11 +430,9 @@ static int abk_test(HIO_HANDLE *f, char *t, const int start)
     /* skip over length and chip/fastmem.*/
     hio_seek(f, 6, SEEK_CUR);
 
-    music = hio_read32b(f); /* get the "Music   " */
-    music = music << 32;
-    music |= hio_read32b(f);
+    hio_read(music, 1, 8, f);	/* get the "Music   " */
 
-    if (music != (unsigned long long)AMOS_MUSIC_TEXT)
+    if (memcmp(music, "Music   ", 8))
     {
         return -1;
     }
@@ -434,7 +446,6 @@ static int abk_load(struct module_data *m, HIO_HANDLE *f, const int start)
     uint16 pattern;
     uint32 first_sample_offset;
     uint32 inst_section_size;
-    uint32 file_size;
 
     struct xmp_module *mod = &m->mod;
 
@@ -443,32 +454,32 @@ static int abk_load(struct module_data *m, HIO_HANDLE *f, const int start)
     struct abk_song song;
     struct abk_playlist playlist;
 
-    ci = NULL;
-    pattern = 0;
-    first_sample_offset = 0;
-
-    hio_seek(f, 0, SEEK_END);
-    file_size = hio_tell(f);
-
     hio_seek(f, AMOS_MAIN_HEADER, SEEK_SET);
 
     main_header.instruments_offset = hio_read32b(f);
     main_header.songs_offset = hio_read32b(f);
     main_header.patterns_offset = hio_read32b(f);
 
+    /* Sanity check */
+    if (main_header.instruments_offset > 0x00100000 ||
+        main_header.songs_offset > 0x00100000 ||
+        main_header.patterns_offset > 0x00100000) {
+            return -1;
+    }
+
     inst_section_size = main_header.instruments_offset;
     D_(D_INFO "Sample Bytes: %d", inst_section_size);
 
     LOAD_INIT();
 
-    set_type(m, "AMOS Music Bank");
+    libxmp_set_type(m, "AMOS Music Bank");
 
     if (read_abk_song(f, &song, AMOS_MAIN_HEADER + main_header.songs_offset) < 0)
     {
         return -1;
     }
 
-    copy_adjust(mod->name, (uint8*) song.song_name, AMOS_STRING_LEN);
+    libxmp_copy_adjust(mod->name, (uint8*) song.song_name, AMOS_STRING_LEN);
 
     MODULE_INFO();
 
@@ -476,16 +487,28 @@ static int abk_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
     mod->chn = AMOS_ABK_CHANNELS;
     mod->pat = hio_read16b(f);
+
+    /* Sanity check */
+    if (mod->pat > 256) {
+        return -1;
+    }
+
     mod->trk = mod->chn * mod->pat;
 
     /* move to the start of the instruments section. */
     hio_seek(f, AMOS_MAIN_HEADER + main_header.instruments_offset, SEEK_SET);
     mod->ins = hio_read16b(f);
+
+    /* Sanity check */
+    if (mod->ins > 255) {
+	return -1;
+    }
+
     mod->smp = mod->ins;
 
     /* Read and convert instruments and samples */
 
-    if (instrument_init(mod) < 0)
+    if (libxmp_init_instrument(m) < 0)
     {
         return -1;
     }
@@ -494,14 +517,18 @@ static int abk_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
     /* read all the instruments in */
     ci = read_abk_insts(f, inst_section_size, mod->ins);
+    if (ci == NULL) {
+        return -1;
+    }
 
     /* store the location of the first sample so we can read them later. */
     first_sample_offset = AMOS_MAIN_HEADER + main_header.instruments_offset + ci[0].sample_offset;
 
     for (i = 0; i < mod->ins; i++)
     {
-        if (subinstrument_alloc(mod, i, 1) < 0)
+        if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
         {
+            free(ci);
             return -1;
         }
 
@@ -532,14 +559,16 @@ static int abk_load(struct module_data *m, HIO_HANDLE *f, const int start)
         mod->xxi[i].sub[0].pan = 0x80;
         mod->xxi[i].sub[0].sid = i;
 
-        instrument_name(mod, i, (uint8*)ci[i].sample_name, 16);
+        libxmp_instrument_name(mod, i, (uint8*)ci[i].sample_name, 16);
 
         D_(D_INFO "[%2X] %-14.14s %04x %04x %04x %c", i,
            mod->xxi[i].name, mod->xxs[i].len, mod->xxs[i].lps, mod->xxs[i].lpe,
            mod->xxs[i].flg & XMP_SAMPLE_LOOP ? 'L' : ' ');
     }
 
-    if (pattern_init(mod) < 0)
+    free(ci);
+
+    if (libxmp_init_pattern(mod) < 0)
     {
         return -1;
     }
@@ -559,33 +588,40 @@ static int abk_load(struct module_data *m, HIO_HANDLE *f, const int start)
     i = 0;
     for (j = 0; j < mod->pat; j++)
     {
-        if (pattern_tracks_alloc(mod, i, 64) < 0)
+        if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
         {
+            free(playlist.pattern);
             return -1;
         }
 
-        for (k = 0; k  < mod->chn; k++)
+        for (k = 0; k < mod->chn; k++)
         {
             pattern = hio_read16b(f);
-            read_abk_pattern(f,  mod->xxt[(i*mod->chn)+k]->event, AMOS_MAIN_HEADER + main_header.patterns_offset + pattern);
+            if (read_abk_pattern(f,  mod->xxt[(i*mod->chn)+k]->event, AMOS_MAIN_HEADER + main_header.patterns_offset + pattern) < 0) {
+    		free(playlist.pattern);
+		return -1;
+	    }
         }
 
         i++;
     }
 
-    /* now push all the patterns into the module and set the length */
-    i = 0;
+    /* Sanity check */
+    if (playlist.length > 256) {
+    	free(playlist.pattern);
+	return -1;
+    }
 	
-    for (j=0; j< playlist.length; j++)
+    mod->len = playlist.length;
+
+    /* now push all the patterns into the module and set the length */
+    for (i = 0; i < playlist.length; i++)
     {
-        /* increment the length */
-        mod->len++;
-        mod->xxo[i++] = playlist.pattern[j];
+        mod->xxo[i] = playlist.pattern[i];
     }
 
     /* free up some memory here */
-    free(ci);
-    free_abk_playlist(&playlist);
+    free(playlist.pattern);
 
     D_(D_INFO "Stored patterns: %d", mod->pat);
     D_(D_INFO "Stored tracks: %d", mod->trk);
@@ -600,7 +636,7 @@ static int abk_load(struct module_data *m, HIO_HANDLE *f, const int start)
         if (mod->xxs[i].len <= 2)
             continue;
 
-        if (load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
+        if (libxmp_load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
         {
             return -1;
         }

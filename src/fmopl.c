@@ -590,7 +590,7 @@ static void init_timetables( FM_OPL *OPL , int ARRATE , int DRRATE )
 		OPL->AR_TABLE[i] = rate / ARRATE;
 		OPL->DR_TABLE[i] = rate / DRRATE;
 	}
-	for (i = 60;i < 76;i++)
+	for (i = 60;i < 75;i++)
 	{
 		OPL->AR_TABLE[i] = EG_AED-1;
 		OPL->DR_TABLE[i] = OPL->DR_TABLE[60];
@@ -706,7 +706,7 @@ static void OPLCloseTable( OPL_STATE *ST )
 	free(ST->VIB_TABLE);
 }
 
-#ifndef XMP_OPL_CSM
+#ifdef XMP_OPL_CSM
 /* CSM Key Controll */
 INLINE void CSMKeyControll(OPL_CH *CH)
 {
@@ -1044,7 +1044,7 @@ static void OPL_UnLockTable( OPL_STATE *ST )
 
 /*** Prototype changed to use with xmp ***/
 /* ---------- update one of chip ----------- */
-void YM3812UpdateOne(FM_OPL *OPL, FMSAMPLE *bk, int len, int vl, int vr, int st)
+void YM3812UpdateOne(FM_OPL *OPL, FMSAMPLE *bk, int len, int st)
 {
 	int data;
 	UINT32 amsCnt  = OPL->amsCnt;
@@ -1089,8 +1089,8 @@ void YM3812UpdateOne(FM_OPL *OPL, FMSAMPLE *bk, int len, int vl, int vr, int st)
 
 		/* store to sound buffer - changed to use with xmp */
 		if (st) 
-			*(bk++) += data * vr;
-		*(bk++) += data * vl;
+			*(bk++) += data << 10;
+		*(bk++) += data << 10;
 	}
 
 	OPL->amsCnt = amsCnt;

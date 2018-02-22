@@ -1,8 +1,9 @@
 /*
  * Wanton_Packer.c   Copyright (C) 1997 Asle / ReDoX
- *                   Copyright (C) 2006-2007 Claudio Matsuoka
  *
  * Converts MODs converted with Wanton packer
+ *
+ * Modified in 2006,2007,2014 by Claudio Matsuoka
  */
 
 #include <string.h>
@@ -10,7 +11,7 @@
 #include "prowiz.h"
 
 
-static int depack_wn(FILE *in, FILE * out)
+static int depack_wn(HIO_HANDLE *in, FILE * out)
 {
 	uint8 c1, c2, c3, c4;
 	uint8 npat, max;
@@ -23,15 +24,15 @@ static int depack_wn(FILE *in, FILE * out)
 
 	/* get whole sample size */
 	for (i = 0; i < 31; i++) {
-		fseek(in, 42 + i * 30, SEEK_SET);
-		ssize += read16b(in) * 2;
+		hio_seek(in, 42 + i * 30, SEEK_SET);
+		ssize += hio_read16b(in) * 2;
 	}
 
 	/* read size of pattern list */
-	fseek(in, 950, SEEK_SET);
-	write8(out, npat = read8(in));
+	hio_seek(in, 950, SEEK_SET);
+	write8(out, npat = hio_read8(in));
 
-	fread(tmp, 129, 1, in);
+	hio_read(tmp, 129, 1, in);
 	fwrite(tmp, 129, 1, out);
 
 	/* write ptk's ID */
@@ -45,13 +46,17 @@ static int depack_wn(FILE *in, FILE * out)
 	max++;
 
 	/* pattern data */
-	fseek(in, 1084, SEEK_SET);
+	hio_seek(in, 1084, SEEK_SET);
 	for (i = 0; i < max; i++) {
 		for (j = 0; j < 256; j++) {
-			c1 = read8(in);
-			c2 = read8(in);
-			c3 = read8(in);
-			c4 = read8(in);
+			c1 = hio_read8(in);
+			c2 = hio_read8(in);
+			c3 = hio_read8(in);
+			c4 = hio_read8(in);
+
+			if (hio_error(in) || c1 >= 74) {
+				return -1;
+			}
 
 			write8(out, c1 * 0xf0 | ptk_table[c1 / 2][0]);
 			write8(out, ptk_table[c1 / 2][1]);
@@ -68,8 +73,6 @@ static int depack_wn(FILE *in, FILE * out)
 
 static int test_wn(uint8 *data, char *t, int s)
 {
-	int start = 0;
-
 	PW_REQUEST_DATA(s, 1082);
 
 	/* test 1 */
@@ -77,11 +80,11 @@ static int test_wn(uint8 *data, char *t, int s)
 		return -1;
 
 	/* test 2 */
-	if (data[start + 951] != 0x7f)
+	if (data[951] != 0x7f)
 		return -1;
 
 	/* test 3 */
-	if (data[start + 950] > 0x7f)
+	if (data[950] > 0x7f)
 		return -1;
 
 	pw_read_title(data, t, 20);

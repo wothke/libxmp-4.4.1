@@ -26,7 +26,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include "common.h"
+#include "depacker.h"
 #include "readrle.h"
 #include "readhuff.h"
 #include "readlzw.h"
@@ -78,18 +80,15 @@ static int read_file_header(FILE * in, struct archived_file_header_tag *hdrp)
 		return 0;
 
 	/* extract the bits from buf */
-	hdrp->compressed_size =
-	    (buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24));
-	hdrp->date = (buf[4] | (buf[5] << 8));
-	hdrp->time = (buf[6] | (buf[7] << 8));
-	hdrp->crc = (buf[8] | (buf[9] << 8));	/* yes, only 16-bit CRC */
+	hdrp->compressed_size = readmem32l(buf);
+	hdrp->date = readmem16l(buf + 4);
+	hdrp->time = readmem16l(buf + 6);
+	hdrp->crc  = readmem16l(buf + 8);	/* yes, only 16-bit CRC */
 	hdrp->has_crc = 1;
 	if (hdrp->method == 1)
 		hdrp->orig_size = hdrp->compressed_size;
 	else
-		hdrp->orig_size =
-		    (buf[10] | (buf[11] << 8) | (buf[12] << 16) |
-		     (buf[13] << 24));
+		hdrp->orig_size = readmem32l(buf + 10);
 
 	/* make *sure* name is asciiz */
 	hdrp->name[12] = 0;
@@ -230,6 +229,7 @@ static int arc_extract(FILE *in, FILE *out)
 	switch (hdr.method) {
 	case 2:		/* no compression */
 		orig_data = data;
+		hdr.orig_size = hdr.compressed_size;
 		break;
 
 #if 0
@@ -246,12 +246,12 @@ static int arc_extract(FILE *in, FILE *out)
 		break;
 
 	case 5:		/* "crunched" (12-bit static LZW) */
-		orig_data = convert_lzw_dynamic(data, 0, 0,
+		orig_data = libxmp_convert_lzw_dynamic(data, 0, 0,
 					hdr.compressed_size, hdr.orig_size, 0);
 		break;
 
 	case 6:		/* "crunched" (RLE+12-bit static LZW) */
-		orig_data = convert_lzw_dynamic(data, 0, 1,
+		orig_data = libxmp_convert_lzw_dynamic(data, 0, 1,
 					hdr.compressed_size, hdr.orig_size, 0);
 		break;
 
@@ -266,18 +266,18 @@ static int arc_extract(FILE *in, FILE *out)
 
 	case 8:		/* "Crunched" [sic]
 			 * (RLE+9-to-12-bit dynamic LZW, a *bit* like GIF) */
-		orig_data = convert_lzw_dynamic(data, 12, 1,
+		orig_data = libxmp_convert_lzw_dynamic(data, 12, 1,
 					hdr.compressed_size, hdr.orig_size,
 					NOMARCH_QUIRK_SKIPMAX);
 		break;
 
 	case 9:		/* "Squashed" (9-to-13-bit, no RLE) */
-		orig_data = convert_lzw_dynamic(data, 13, 0,
+		orig_data = libxmp_convert_lzw_dynamic(data, 13, 0,
 					hdr.compressed_size, hdr.orig_size, 0);
 		break;
 
 	case 127:	/* "Compress" (9-to-16-bit, no RLE) ("Spark" only) */
-		orig_data = convert_lzw_dynamic(data, 16, 0,
+		orig_data = libxmp_convert_lzw_dynamic(data, 16, 0,
 					hdr.compressed_size, hdr.orig_size, 0);
 		break;
 
@@ -306,7 +306,50 @@ static int arc_extract(FILE *in, FILE *out)
 	return exitval;
 }
 
-int decrunch_arc(FILE *f, FILE *fo)
+static int test_arc(unsigned char *b)
+{
+	if (b[0] == 0x1a) {
+		int x = b[1] & 0x7f;
+		int i, flag = 0;
+		long size;
+
+		/* check file name */
+		for (i = 0; i < 13; i++) {
+			if (b[2 + i] == 0) {
+				if (i == 0)	/* name can't be empty */
+					flag = 1;
+				break;
+			}
+			if (!isprint(b[2 + i])) { /* name must be printable */
+				flag = 1;
+				break;
+			}
+		}
+
+		size = readmem32l(b + 15);	/* max file size is 512KB */
+		if (size < 0 || size > 512 * 1024)
+			flag = 1;
+
+		if (flag == 0) {
+			if (x >= 1 && x <= 9 && x != 7) {
+				/* Arc */
+				return 1;
+			} else if (x == 0x7f) {
+				/* !Spark */
+				return 1;
+			}
+		}
+	}
+
+	return 0;
+}
+
+static int decrunch_arc(FILE *f, FILE *fo)
 {
 	return arc_extract(f, fo);
 }
+
+struct depacker libxmp_depacker_arc = {
+	test_arc,
+	decrunch_arc
+};

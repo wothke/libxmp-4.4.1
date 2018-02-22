@@ -34,6 +34,8 @@ const struct pw_format *const pw_format[NUM_PW_FORMATS + 1] = {
 	&pw_wn,
 	&pw_unic_id,
 	&pw_tp3,
+	&pw_tp2,
+	&pw_tp1,
 	&pw_skyt,
 
 	/* No signature */
@@ -43,6 +45,8 @@ const struct pw_format *const pw_format[NUM_PW_FORMATS + 1] = {
 	&pw_eu,
 	&pw_p4x,
 	&pw_pp21,
+	&pw_pp30,
+	&pw_pp10,
 	&pw_p50a,
 	&pw_p60a,
 	&pw_p61a,
@@ -58,13 +62,23 @@ const struct pw_format *const pw_format[NUM_PW_FORMATS + 1] = {
 	&pw_tdd,
 	&pw_starpack,
 	&pw_gmc,
+	/* &pw_pm01, */
 	&pw_titanics,
 	NULL
 };
 
-int pw_move_data(FILE *out, FILE *in, int len)
+int pw_move_data(FILE *out, HIO_HANDLE *in, int len)
 {
-	return move_data(out, in, len);
+	uint8 buf[1024];
+	int l;
+
+	do {
+		l = hio_read(buf, 1, len > 1024 ? 1024 : len, in);
+		fwrite(buf, 1, l, out);
+		len -= l;
+	} while (l > 0 && len > 0);
+
+	return 0;
 }
 
 int pw_write_zero(FILE *out, int len)
@@ -82,39 +96,26 @@ int pw_write_zero(FILE *out, int len)
 	return 0;
 }
 
-int pw_wizardry(int in, int out, char **name)
+int pw_wizardry(HIO_HANDLE *file_in, FILE *file_out, char **name)
 {
-	struct stat st;
-	int size = -1, in_size;
+	int in_size;
 	uint8 *data;
-	FILE *file_in, *file_out;
 	char title[21];
 	int i;
 
-	file_in = fdopen(dup(in), "rb");
-	if (file_in == NULL)
-		return -1;
-
-	file_out = fdopen(dup(out), "w+b");
-	if (file_out == NULL)
-		return -1;
-
-	if (fstat(fileno(file_in), &st) < 0)
-		in_size = -1;
-	else
-		in_size = st.st_size;
+	in_size = hio_size(file_in);
 
 	/* printf ("input file size : %d\n", in_size); */
-	if (in_size < MIN_FILE_LENGHT)
+	if (in_size < MIN_FILE_LENGHT) {
 		return -2;
-
-	/* alloc mem */
-	data = (uint8 *)malloc (in_size + 4096);	/* slack added */
-	if (data == NULL) {
-		perror("Couldn't allocate memory");
-		return -1;
 	}
-	fread(data, in_size, 1, file_in);
+
+	if ((data = (uint8 *)malloc(in_size)) == NULL) {
+		goto err;
+	}
+	if (hio_read(data, 1, in_size, file_in) != in_size) {
+		goto err2;
+	}
 
 
   /********************************************************************/
@@ -128,20 +129,23 @@ int pw_wizardry(int in, int out, char **name)
 	}
 
 	if (pw_format[i] == NULL) {
-		free(data);
-		return -1;
+		goto err2;
 	}
 
-	fseek(file_in, 0, SEEK_SET);
-	size = pw_format[i]->depack(file_in, file_out);
-
-	if (size < 0) {
-		return -1;
+	if (hio_error(file_in)) {
+		/* reset error flag */
 	}
 
-	fclose(file_out);
-	fclose(file_in);
+	hio_seek(file_in, 0, SEEK_SET);
+	if (pw_format[i]->depack(file_in, file_out) < 0) {
+		goto err2;
+	}
 
+	if (hio_error(file_in)) {
+		goto err2;
+	}
+
+	fflush(file_out);
 	free(data);
 
 	if (name != NULL) {
@@ -149,6 +153,11 @@ int pw_wizardry(int in, int out, char **name)
 	}
 
 	return 0;
+
+    err2:
+	free(data);
+    err:
+	return -1;
 }
 
 int pw_check(unsigned char *b, int s, struct xmp_test_info *info)
@@ -166,7 +175,7 @@ int pw_check(unsigned char *b, int s, struct xmp_test_info *info)
 			if (info != NULL) {
 				memcpy(info->name, title, 21);
 				strncpy(info->type, pw_format[i]->name,
-							XMP_NAME_SIZE);
+							XMP_NAME_SIZE - 1);
 			}
 			return 0;
 		}

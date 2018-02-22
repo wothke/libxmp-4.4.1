@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 /* Loader for Images Music System modules based on the EP replayer.
@@ -54,7 +68,7 @@ struct ims_header {
 static int ims_test (HIO_HANDLE *, char *, const int);
 static int ims_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader ims_loader = {
+const struct format_loader libxmp_loader_ims = {
     "Images Music System",
     ims_test,
     ims_load
@@ -83,7 +97,7 @@ static int ims_test(HIO_HANDLE *f, char *t, const int start)
 
 	smp_size += ih.ins[i].size * 2;
 
-	if (test_name(ih.ins[i].name, 20) < 0)
+	if (libxmp_test_name(ih.ins[i].name, 20) < 0)
 	    return -1;
 
 	if (ih.ins[i].volume > 0x40)
@@ -104,8 +118,8 @@ static int ims_test(HIO_HANDLE *f, char *t, const int start)
 
     ih.len = hio_read8(f);
     ih.zero = hio_read8(f);
-    hio_read (&ih.orders, 128, 1, f);
-    hio_read (&ih.magic, 4, 1, f);
+    hio_read(&ih.orders, 128, 1, f);
+    hio_read(&ih.magic, 4, 1, f);
   
     if (ih.zero > 1)		/* not sure what this is */
 	return -1;
@@ -125,7 +139,7 @@ static int ims_test(HIO_HANDLE *f, char *t, const int start)
 	return -1;
    
     hio_seek(f, start + 0, SEEK_SET);
-    read_title(f, t, 20);
+    libxmp_read_title(f, t, 20);
 
     return 0;
 }
@@ -143,6 +157,7 @@ static int ims_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
     LOAD_INIT();
 
+    mod->chn = 4;
     mod->ins = 31;
     mod->smp = mod->ins;
     smp_size = 0;
@@ -162,6 +177,9 @@ static int ims_load(struct module_data *m, HIO_HANDLE *f, const int start)
     }
 
     ih.len = hio_read8(f);
+    if (ih.len > 128) {
+        return -1;
+    }
     ih.zero = hio_read8(f);
     hio_read (&ih.orders, 128, 1, f);
     hio_read (&ih.magic, 4, 1, f);
@@ -177,50 +195,60 @@ static int ims_load(struct module_data *m, HIO_HANDLE *f, const int start)
     mod->trk = mod->chn * mod->pat;
 
     strncpy(mod->name, (char *)ih.title, 20);
-    set_type(m, "Images Music System");
+    libxmp_set_type(m, "Images Music System");
 
     MODULE_INFO();
 
-    if (instrument_init(mod) < 0)
+    if (libxmp_init_instrument(m) < 0)
 	return -1;
 
     for (i = 0; i < mod->ins; i++) {
-	if (subinstrument_alloc(mod, i, 1) < 0)
+	struct xmp_instrument *xxi;
+	struct xmp_subinstrument *sub;
+	struct xmp_sample *xxs;
+
+	if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 	    return -1;
 
-	mod->xxs[i].len = 2 * ih.ins[i].size;
-	mod->xxs[i].lpe = mod->xxs[i].lps + 2 * ih.ins[i].loop_size;
-	mod->xxs[i].flg = ih.ins[i].loop_size > 1 ? XMP_SAMPLE_LOOP : 0;
-	mod->xxi[i].sub[0].fin = 0; /* ih.ins[i].finetune; */
-	mod->xxi[i].sub[0].vol = ih.ins[i].volume;
-	mod->xxi[i].sub[0].pan = 0x80;
-	mod->xxi[i].sub[0].sid = i;
-	mod->xxi[i].rls = 0xfff;
+	xxi = &mod->xxi[i];
+	sub = &xxi->sub[0];
+	xxs = &mod->xxs[i];
 
-	if (mod->xxs[i].len > 0)
-		mod->xxi[i].nsm = 1;
+	xxs->len = 2 * ih.ins[i].size;
+	xxs->lps = 2 * ih.ins[i].loop_start;
+	xxs->lpe = xxs->lps + 2 * ih.ins[i].loop_size;
+	xxs->flg = ih.ins[i].loop_size > 1 ? XMP_SAMPLE_LOOP : 0;
+	sub->fin = 0; /* ih.ins[i].finetune; */
+	sub->vol = ih.ins[i].volume;
+	sub->pan = 0x80;
+	sub->sid = i;
+	//mod->xxi[i].rls = 0xfff;
 
-	instrument_name(mod, i, ih.ins[i].name, 20);
+	if (xxs->len > 0) {
+		xxi->nsm = 1;
+	}
+
+	libxmp_instrument_name(mod, i, ih.ins[i].name, 20);
 
 	D_(D_INFO "[%2X] %-20.20s %04x %04x %04x %c V%02x %+d",
-		i, mod->xxi[i].name, mod->xxs[i].len, mod->xxs[i].lps,
-		mod->xxs[i].lpe, ih.ins[i].loop_size > 1 ? 'L' : ' ',
-		mod->xxi[i].sub[0].vol, mod->xxi[i].sub[0].fin >> 4);
+		i, xxi->name, xxs->len, xxs->lps, xxs->lpe,
+		ih.ins[i].loop_size > 1 ? 'L' : ' ', sub->vol, sub->fin >> 4);
     }
 
-    if (pattern_init(mod) < 0)
+    if (libxmp_init_pattern(mod) < 0) {
 	return -1;
+    }
 
     /* Load and convert patterns */
     D_(D_INFO "Stored patterns: %d", mod->pat);
 
     for (i = 0; i < mod->pat; i++) {
-	if (pattern_tracks_alloc(mod, i, 64) < 0)
+	if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 	    return -1;
 
 	for (j = 0; j < 0x100; j++) {
 	    event = &EVENT (i, j & 0x3, j >> 2);
-	    hio_read (ims_event, 1, 3, f);
+	    hio_read(ims_event, 1, 3, f);
 
 	    /* Event format:
 	     *
@@ -240,7 +268,7 @@ static int ims_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	    event->fxt = LSN(ims_event[1]);
 	    event->fxp = ims_event[2];
 
-	    disable_continue_fx (event);
+	    libxmp_disable_continue_fx (event);
 
 	    /* According to Asle:
 	     * ``Just note that pattern break effect command (D**) uses
@@ -254,7 +282,7 @@ static int ims_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	}
     }
 
-    m->quirk |= QUIRK_MODRNG;
+    m->period_type = PERIOD_MODRNG;
 
     /* Load samples */
 
@@ -263,7 +291,7 @@ static int ims_load(struct module_data *m, HIO_HANDLE *f, const int start)
     for (i = 0; i < mod->smp; i++) {
 	if (!mod->xxs[i].len)
 	    continue;
-	if (load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
+	if (libxmp_load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
 	    return -1;
     }
 

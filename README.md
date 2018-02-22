@@ -12,15 +12,16 @@ addition is the new adapter.c file: It encapsulates all those APIs that interfac
 JavaScript/Web world. 
 
 ## Credits
-This "project" is based on libxmp (4.3.0): http://xmp.sourceforge.net/
+This "project" is based on libxmp (4.4.1): http://xmp.sourceforge.net/
 
 
 ## Howto build
+
 You'll need Emscripten (http://kripken.github.io/emscripten-site/docs/getting_started/downloads.html). The make script 
 is designed for use of emscripten version 1.37.29 (unless you want to create WebAssembly output, older versions might 
 also still work).
 
-The below instructions assume that the libxmp-4.3.0 project folder has been moved into the main emscripten 
+The below instructions assume that the libxmp-4.4.1 project folder has been moved into the main emscripten 
 installation folder (maybe not necessary) and that a command prompt has been opened within the 
 project's "emscripten" sub-folder, and that the Emscripten environment vars have been previously 
 set (run emsdk_env.bat).

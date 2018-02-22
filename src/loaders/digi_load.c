@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -41,7 +41,7 @@
 static int digi_test (HIO_HANDLE *, char *, const int);
 static int digi_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader digi_loader = {
+const struct format_loader libxmp_loader_digi = {
     "DIGI Booster",
     digi_test,
     digi_load
@@ -61,7 +61,7 @@ static int digi_test(HIO_HANDLE *f, char *t, const int start)
     hio_seek(f, 3 * 4 * 32, SEEK_CUR);
     hio_seek(f, 2 * 1 * 32, SEEK_CUR);
 
-    read_title(f, t, 32);
+    libxmp_read_title(f, t, 32);
 
     return 0;
 }
@@ -107,6 +107,12 @@ static int digi_load(struct module_data *m, HIO_HANDLE *f, const int start)
     hio_read(&dh.unknown, 19, 1, f);
     dh.pat = hio_read8(f);
     dh.len = hio_read8(f);
+
+    /* Sanity check */
+    if (dh.len > 127) {
+        return -1;
+    }
+
     hio_read(&dh.ord, 128, 1, f);
 
     for (i = 0; i < 31; i++)
@@ -132,23 +138,23 @@ static int digi_load(struct module_data *m, HIO_HANDLE *f, const int start)
     mod->trk = mod->pat * mod->chn;
     mod->len = dh.len + 1;
 
-    m->quirk |= QUIRK_MODRNG;
+    m->period_type = PERIOD_MODRNG;
 
-    copy_adjust(mod->name, dh.title, 32);
-    set_type(m, "DIGI Booster %-4.4s", dh.vstr);
+    libxmp_copy_adjust(mod->name, dh.title, 32);
+    libxmp_set_type(m, "DIGI Booster %-4.4s", dh.vstr);
 
     MODULE_INFO();
  
     for (i = 0; i < mod->len; i++)
 	mod->xxo[i] = dh.ord[i];
  
-    if (instrument_init(mod) < 0)
+    if (libxmp_init_instrument(m) < 0)
 	return -1;
 
     /* Read and convert instruments and samples */
 
     for (i = 0; i < mod->ins; i++) {
-	if (subinstrument_alloc(mod, i, 1) < 0)
+	if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 	    return -1;
 
 	mod->xxs[i].len = dh.slen[i];
@@ -163,21 +169,21 @@ static int digi_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	if (mod->xxs[i].len > 0)
 	    mod->xxi[i].nsm = 1;
 
-	instrument_name(mod, i, dh.insname[i], 30);
+	libxmp_instrument_name(mod, i, dh.insname[i], 30);
 
 	D_(D_INFO "[%2X] %-30.30s %04x %04x %04x %c V%02x", i,
 		mod->xxi[i].name, mod->xxs[i].len, mod->xxs[i].lps, mod->xxs[i].lpe,
 		mod->xxs[i].flg & XMP_SAMPLE_LOOP ? 'L' : ' ', mod->xxi[i].sub[0].vol);
     }
 
-    if (pattern_init(mod) < 0)
+    if (libxmp_init_pattern(mod) < 0)
 	return -1;
 
     /* Read and convert patterns */
     D_(D_INFO "Stored patterns: %d", mod->pat);
 
     for (i = 0; i < mod->pat; i++) {
-	if (pattern_tracks_alloc(mod, i, 64) < 0)
+	if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 	    return -1;
 
 	if (dh.pack) {
@@ -193,7 +199,7 @@ static int digi_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	        if (chn_table[j] & k) {
 		    hio_read (digi_event, 4, 1, f);
 		    event = &EVENT (i, c, j);
-	            decode_protracker_event(event, digi_event);
+	            libxmp_decode_protracker_event(event, digi_event);
 		    switch (event->fxt) {
 		    case 0x08:		/* Robot */
 			event->fxt = event->fxp = 0;
@@ -225,7 +231,7 @@ static int digi_load(struct module_data *m, HIO_HANDLE *f, const int start)
     /* Read samples */
     D_(D_INFO "Stored samples: %d", mod->smp);
     for (i = 0; i < mod->ins; i++) {
-	if (load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
+	if (libxmp_load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
 	    return -1;
     }
 

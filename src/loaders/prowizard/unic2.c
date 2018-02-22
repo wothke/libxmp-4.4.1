@@ -1,39 +1,41 @@
 /*
  * Unic_Tracker_2.c   Copyright (C) 1997 Asle / ReDoX
- *                    Copyright 2006-2007 Claudio Matsuoka
  *
  * Convert Unic Tracker 2 MODs to Protracker
+ *
+ * Modified in 2006,2007,2014 by Claudio Matsuoka
  */
 
 #include <string.h>
 #include <stdlib.h>
 #include "prowiz.h"
 
-#define ON 1
-#define OFF 2
 
-static int depack_unic2(FILE *in, FILE *out)
+static int depack_unic2(HIO_HANDLE *in, FILE *out)
 {
 	uint8 c1, c2, c3, c4;
 	uint8 npat, maxpat;
 	uint8 ins, note, fxt, fxp;
-	uint8 fine = 0;
+	uint8 fine;
 	uint8 tmp[1025];
-	uint8 loop_status = OFF;	/* standard /2 */
-	int i, j, k, l;
-	int ssize = 0;
+	int i, j;
+	int ssize;
 
 	pw_write_zero(out, 20);		/* title */
 
+	ssize = 0;
 	for (i = 0; i < 31; i++) {
+		int len, start, lsize;
+
 		pw_move_data(out, in, 20);	/* sample name */
 		write8(out, 0);
 		write8(out, 0);
 
 		/* fine on ? */
-		c1 = read8(in);
-		c2 = read8(in);
+		c1 = hio_read8(in);
+		c2 = hio_read8(in);
 		j = (c1 << 8) + c2;
+
 		if (j != 0) {
 			if (j < 256)
 				fine = 0x10 - c2;
@@ -44,30 +46,30 @@ static int depack_unic2(FILE *in, FILE *out)
 		}
 
 		/* smp size */
-		write16b(out, l = read16b(in));
-		ssize += l * 2;
+		len = hio_read16b(in);
+		write16b(out, len);
+		ssize += len << 1;
 
-		read8(in);
+		hio_read8(in);
 		write8(out, fine);		/* fine */
-		write8(out, read8(in));		/* vol */
+		write8(out, hio_read8(in));		/* vol */
 
-		j = read16b(in);		/* loop start */
-		k = read16b(in);		/* loop size */
+		start = hio_read16b(in);		/* loop start */
+		lsize = hio_read16b(in);		/* loop size */
 
-		if ((((j * 2) + k) <= l) && (j != 0)) {
-			loop_status = ON;
-			j *= 2;
+		if (start * 2 + lsize <= len && start != 0) {
+			start <<= 1;
 		}
 
-		write16b(out, j);
-		write16b(out, k);
+		write16b(out, start);
+		write16b(out, lsize);
 	}
 
-	write8(out, npat = read8(in));		/* number of pattern */
+	write8(out, npat = hio_read8(in));		/* number of pattern */
 	write8(out, 0x7f);			/* noisetracker byte */
-	read8(in);
+	hio_read8(in);
 
-	fread(tmp, 128, 1, in);
+	hio_read(tmp, 128, 1, in);
 	fwrite(tmp, 128, 1, out);		/* pat table */
 
 	/* get highest pattern number */
@@ -82,12 +84,18 @@ static int depack_unic2(FILE *in, FILE *out)
 	/* pattern data */
 	for (i = 0; i < maxpat; i++) {
 		for (j = 0; j < 256; j++) {
-			c1 = read8(in);
-			c2 = read8(in);
-			c3 = read8(in);
+			c1 = hio_read8(in);
+			c2 = hio_read8(in);
+			c3 = hio_read8(in);
 
 			ins = ((c1 >> 2) & 0x10) | ((c2 >> 4) & 0x0f);
 			note = c1 & 0x3f;
+
+			/* Sanity check */
+			if (note >= 37) {
+				return -1;
+			}
+
 			fxt = c2 & 0x0f;
 			fxp = c3;
 
@@ -112,106 +120,96 @@ static int depack_unic2(FILE *in, FILE *out)
 	return 0;
 }
 
-static int test_unic2 (uint8 *data, char *t, int s)
+static int test_unic2(uint8 *data, char *t, int s)
 {
-	int j, k, l, m, n, o;
-	int start = 0, ssize;
+	int i;
+	int len, psize, ssize, max_ins;
 
 	/* test 1 */
 	PW_REQUEST_DATA (s, 1084);
 
 	/* test #2 ID = $00000000 ? */
-	if (readmem32b(data + start + 1080) == 0x00000000)
+	if (readmem32b(data + 1080) == 0x00000000)
 		return -1;
 
 	/* test 2,5 :) */
-	o = 0;
 	ssize = 0;
-	for (k = 0; k < 31; k++) {
-		int x = start + k * 30;
+	max_ins = 0;
+	for (i = 0; i < 31; i++) {
+		uint8 *d = data + i * 30;
 
-		j = readmem16b(data + x + 22) * 2;
-		m = readmem16b(data + x + 26) * 2;
-		n = readmem16b(data + x + 28) * 2;
-		ssize += j;
+		int size = readmem16b(d + 22) << 1;
+		int start = readmem16b(d + 26) << 1;
+		int lsize = readmem16b(d + 28) << 1;
+		ssize += size;
 
-		if (j + 2 < m + n)
+		if (size + 2 < start + lsize)
 			return -1;
 
-		if (j > 0xffff || m > 0xffff || n > 0xffff)
+		if (size > 0xffff || start > 0xffff || lsize > 0xffff)
 			return -1;
 
-		if (data[x + 25] > 0x40)
+		if (d[25] > 0x40)
 			return -1;
 
-		if (readmem16b(data + x + 20) && j == 0)
+		if (readmem16b(d + 20) && size == 0)
 			return -1;
 
-		if (data[x + 25] != 0 && j == 0)
+		if (d[25] != 0 && size == 0)
 			return -1;
 
 		/* get the highest !0 sample */
-		if (j != 0)
-			o = j + 1;
+		if (size != 0)
+			max_ins = i + 1;
 	}
 
 	if (ssize <= 2)
 		return -1;
 
 	/* test #4  pattern list size */
-	l = data[start + 930];
-	if (l > 127 || l == 0)
+	len = data[930];
+	if (len == 0 || len > 127)
 		return -1;
-	/* l holds the size of the pattern list */
 
-	k = 0;
-	for (j = 0; j < l; j++) {
-		if (data[start + 932 + j] > k)
-			k = data[start + 932 + j];
-		if (data[start + 932 + j] > 127)
+	psize = 0;
+	for (i = 0; i < len; i++) {
+		int x = data[932 + i];
+		if (x > 127)
 			return -1;
+		if (x > psize)
+			psize = x;
 	}
-	/* k holds the highest pattern number */
 
 	/* test last patterns of the pattern list = 0 ? */
-	j += 2;		/* just to be sure .. */
-	while (j != 128) {
-		if (data[start + 932 + j] != 0)
+	for (i += 2; i != 128; i++) {
+		if (data[932 + i] != 0)
 			return -1;
-		j += 1;
 	}
-	/* k is the number of pattern in the file (-1) */
-	k += 1;
 
-#if 0
-	/* test #5 pattern data ... */
-	if (((k * 768) + 1060 + start) > in_size) {
-/*printf ( "#5,0 (Start:%ld)\n" , start );*/
-		Test = BAD;
-		return;
-	}
-#endif
+	psize++;
+	psize <<= 8;
 
-	PW_REQUEST_DATA (s, 1060 + k * 256 * 3 + 2);
+	PW_REQUEST_DATA (s, 1060 + psize * 3 + 2);
 
-	for (j = 0; j < (k << 8); j++) {
-		int y = start + 1060 + j * 3;
+	for (i = 0; i < psize; i++) {
+		uint8 *d = data + 1060 + i * 3;
+		int ins;
 
 		/* relative note number + last bit of sample > $34 ? */
-		if (data[y] > 0x74)
+		if (d[0] > 0x74)
 			return -1;
-		if ((data[y] & 0x3F) > 0x24)
+		if ((d[0] & 0x3F) > 0x24)
 			return -1;
-		if ((data[y + 1] & 0x0F) == 0x0C && data[y + 2] > 0x40)
+		if ((d[1] & 0x0F) == 0x0C && d[2] > 0x40)
 			return -1;
-		if ((data[y + 1] & 0x0F) == 0x0B && data[y + 2] > 0x7F)
+		if ((d[1] & 0x0F) == 0x0B && d[2] > 0x7F)
 			return -1;
-		if ((data[y + 1] & 0x0F) == 0x0D && data[y + 2] > 0x40)
+		if ((d[1] & 0x0F) == 0x0D && d[2] > 0x40)
 			return -1;
 
-		n = ((data[y] >> 2) & 0x30) | ((data[y + 2] >> 4) & 0x0f);
+		ins = ((d[0] >> 2) & 0x30) | ((d[2] >> 4) & 0x0f);
 
-		if (n > o)
+		if (ins > max_ins)
 			return -1;
 	}
 

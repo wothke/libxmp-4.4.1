@@ -1,5 +1,5 @@
-/* Extended Module Player core player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -22,14 +22,15 @@
 
 #include <stdlib.h>
 #include <string.h>
-
+#include <math.h>
 #include "common.h"
 #include "virtual.h"
 #include "mixer.h"
 #include "period.h"
+#include "player.h"	/* for set_sample_end() */
 
-#ifndef LIBXMP_CORE_PLAYER
-#include "synth.h"
+#ifdef LIBXMP_PAULA_SIMULATOR
+#include "paula.h"
 #endif
 
 
@@ -37,7 +38,7 @@
 #define FLAG_STEREO	0x02
 #define FLAG_FILTER	0x04
 #define FLAG_ACTIVE	0x10
-#define FLAG_SYNTH	0x20
+/* #define FLAG_SYNTH	0x20 */
 #define FIDX_FLAGMASK	(FLAG_16_BITS | FLAG_STEREO | FLAG_FILTER)
 
 #define DOWNMIX_SHIFT	 12
@@ -46,32 +47,38 @@
 #define LIM16_HI	 32767
 #define LIM16_LO	-32768
 
-#define MIX_FN(x) void x (struct mixer_voice *, int *, int, int, int, int)
+#define MIX_FN(x) void libxmp_mix_##x(struct mixer_voice *, int *, int, int, int, int, int, int, int)
 
-MIX_FN(smix_mono_8bit_nearest);
-MIX_FN(smix_mono_8bit_linear);
-MIX_FN(smix_mono_16bit_nearest);
-MIX_FN(smix_mono_16bit_linear);
-MIX_FN(smix_stereo_8bit_nearest);
-MIX_FN(smix_stereo_8bit_linear);
-MIX_FN(smix_stereo_16bit_nearest);
-MIX_FN(smix_stereo_16bit_linear);
-MIX_FN(smix_mono_8bit_spline);
-MIX_FN(smix_mono_16bit_spline);
-MIX_FN(smix_stereo_8bit_spline);
-MIX_FN(smix_stereo_16bit_spline);
+MIX_FN(mono_8bit_nearest);
+MIX_FN(mono_8bit_linear);
+MIX_FN(mono_16bit_nearest);
+MIX_FN(mono_16bit_linear);
+MIX_FN(stereo_8bit_nearest);
+MIX_FN(stereo_8bit_linear);
+MIX_FN(stereo_16bit_nearest);
+MIX_FN(stereo_16bit_linear);
+MIX_FN(mono_8bit_spline);
+MIX_FN(mono_16bit_spline);
+MIX_FN(stereo_8bit_spline);
+MIX_FN(stereo_16bit_spline);
 
 #ifndef LIBXMP_CORE_DISABLE_IT
-MIX_FN(smix_mono_8bit_linear_filter);
-MIX_FN(smix_mono_16bit_linear_filter);
-MIX_FN(smix_stereo_8bit_linear_filter);
-MIX_FN(smix_stereo_16bit_linear_filter);
-MIX_FN(smix_mono_8bit_spline_filter);
-MIX_FN(smix_mono_16bit_spline_filter);
-MIX_FN(smix_stereo_8bit_spline_filter);
-MIX_FN(smix_stereo_16bit_spline_filter);
+MIX_FN(mono_8bit_linear_filter);
+MIX_FN(mono_16bit_linear_filter);
+MIX_FN(stereo_8bit_linear_filter);
+MIX_FN(stereo_16bit_linear_filter);
+MIX_FN(mono_8bit_spline_filter);
+MIX_FN(mono_16bit_spline_filter);
+MIX_FN(stereo_8bit_spline_filter);
+MIX_FN(stereo_16bit_spline_filter);
 #endif
 
+#ifdef LIBXMP_PAULA_SIMULATOR
+MIX_FN(mono_a500);
+MIX_FN(mono_a500_filter);
+MIX_FN(stereo_a500);
+MIX_FN(stereo_a500_filter);
+#endif
 
 /* Mixers array index:
  *
@@ -80,50 +87,75 @@ MIX_FN(smix_stereo_16bit_spline_filter);
  * bit 2: 0=unfiltered, 1=filtered
  */
 
-// typedef void (*mixer_set[])();
-typedef void (*mixer_set[])(struct mixer_voice *, int *, int, int, int, int);
+typedef void (*mixer_set[])(struct mixer_voice *, int *, int, int, int, int, int, int, int);
 
 static mixer_set nearest_mixers = {
-	smix_mono_8bit_nearest,
-	smix_mono_16bit_nearest,
-	smix_stereo_8bit_nearest,
-	smix_stereo_16bit_nearest,
+	libxmp_mix_mono_8bit_nearest,
+	libxmp_mix_mono_16bit_nearest,
+	libxmp_mix_stereo_8bit_nearest,
+	libxmp_mix_stereo_16bit_nearest,
 
 #ifndef LIBXMP_CORE_DISABLE_IT
-	smix_mono_8bit_nearest,
-	smix_mono_16bit_nearest,
-	smix_stereo_8bit_nearest,
-	smix_stereo_16bit_nearest,
+	libxmp_mix_mono_8bit_nearest,
+	libxmp_mix_mono_16bit_nearest,
+	libxmp_mix_stereo_8bit_nearest,
+	libxmp_mix_stereo_16bit_nearest,
 #endif
 };
 
 static mixer_set linear_mixers = {
-	smix_mono_8bit_linear,
-	smix_mono_16bit_linear,
-	smix_stereo_8bit_linear,
-	smix_stereo_16bit_linear,
+	libxmp_mix_mono_8bit_linear,
+	libxmp_mix_mono_16bit_linear,
+	libxmp_mix_stereo_8bit_linear,
+	libxmp_mix_stereo_16bit_linear,
 
 #ifndef LIBXMP_CORE_DISABLE_IT
-	smix_mono_8bit_linear_filter,
-	smix_mono_16bit_linear_filter,
-	smix_stereo_8bit_linear_filter,
-	smix_stereo_16bit_linear_filter
+	libxmp_mix_mono_8bit_linear_filter,
+	libxmp_mix_mono_16bit_linear_filter,
+	libxmp_mix_stereo_8bit_linear_filter,
+	libxmp_mix_stereo_16bit_linear_filter
 #endif
 };
 
 static mixer_set spline_mixers = {
-	smix_mono_8bit_spline,
-	smix_mono_16bit_spline,
-	smix_stereo_8bit_spline,
-	smix_stereo_16bit_spline,
+	libxmp_mix_mono_8bit_spline,
+	libxmp_mix_mono_16bit_spline,
+	libxmp_mix_stereo_8bit_spline,
+	libxmp_mix_stereo_16bit_spline,
 
 #ifndef LIBXMP_CORE_DISABLE_IT
-	smix_mono_8bit_spline_filter,
-	smix_mono_16bit_spline_filter,
-	smix_stereo_8bit_spline_filter,
-	smix_stereo_16bit_spline_filter
+	libxmp_mix_mono_8bit_spline_filter,
+	libxmp_mix_mono_16bit_spline_filter,
+	libxmp_mix_stereo_8bit_spline_filter,
+	libxmp_mix_stereo_16bit_spline_filter
 #endif
 };
+
+#ifdef LIBXMP_PAULA_SIMULATOR
+static mixer_set a500_mixers = {
+	libxmp_mix_mono_a500,
+	NULL,
+	libxmp_mix_stereo_a500,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL
+};
+
+
+static mixer_set a500led_mixers = {
+	libxmp_mix_mono_a500_filter,
+	NULL,
+	libxmp_mix_stereo_a500_filter,
+	NULL,
+	NULL,
+	NULL,
+	NULL,
+	NULL
+};
+#endif
+
 
 /* Downmix 32bit samples to 8bit, signed or unsigned, mono or stereo output */
 static void downmix_int_8bit(char *dest, int32 *src, int num, int amp, int offs)
@@ -166,9 +198,118 @@ static void downmix_int_16bit(int16 *dest, int32 *src, int num, int amp, int off
 	}
 }
 
+static void anticlick(struct mixer_voice *vi)
+{
+	vi->flags |= ANTICLICK;
+	vi->old_vl = 0;
+	vi->old_vr = 0;
+}
+
+/* Ok, it's messy, but it works :-) Hipolito */
+static void do_anticlick(struct context_data *ctx, int voc, int32 *buf, int count)
+{
+	struct player_data *p = &ctx->p;
+	struct mixer_data *s = &ctx->s;
+	struct mixer_voice *vi = &p->virt.voice_array[voc];
+	int smp_l, smp_r, max_x2;
+	int discharge = s->ticksize >> ANTICLICK_SHIFT;
+
+	smp_r = vi->sright;
+	smp_l = vi->sleft;
+	vi->sright = vi->sleft = 0;
+
+	if (smp_l == 0 && smp_r == 0) {
+		return;
+	}
+
+	if (buf == NULL) {
+		buf = s->buf32;
+		count = discharge;
+	} else if (count > discharge) {
+		count = discharge;
+	}
+
+	if (count <= 0) {
+		return;
+	}
+
+	max_x2 = count * count;
+
+	while (count--) {
+		if (~s->format & XMP_FORMAT_MONO) {
+			*buf++ += (count * (smp_r >> 10) / max_x2 * count) << 10;
+		}
+
+		*buf++ += (count * (smp_l >> 10) / max_x2 * count) << 10;
+	}
+}
+
+static void set_sample_end(struct context_data *ctx, int voc, int end)
+{
+	struct player_data *p = &ctx->p;
+	struct module_data *m = &ctx->m;
+	struct mixer_voice *vi = &p->virt.voice_array[voc];
+	struct channel_data *xc;
+
+	if ((uint32)voc >= p->virt.maxvoc)
+		return;
+
+	xc = &p->xc_data[vi->chn];
+
+	if (end) {
+		SET_NOTE(NOTE_SAMPLE_END);
+		if (HAS_QUIRK(QUIRK_RSTCHN)) {
+			libxmp_virt_resetvoice(ctx, voc, 0);
+		}
+	} else {
+		RESET_NOTE(NOTE_SAMPLE_END);
+	}
+}
+
+static void adjust_voice_end(struct mixer_voice *vi, struct xmp_sample *xxs)
+{
+	if (xxs->flg & XMP_SAMPLE_LOOP) {
+		if ((xxs->flg & XMP_SAMPLE_LOOP_FULL) && (~vi->flags & SAMPLE_LOOP)) {
+			vi->end = xxs->len;
+		} else {
+			vi->end = xxs->lpe;
+		}
+	} else {
+		vi->end = xxs->len;
+	}
+}
+
+static void loop_reposition(struct context_data *ctx, struct mixer_voice *vi, struct xmp_sample *xxs)
+{
+#ifndef LIBXMP_CORE_DISABLE_IT
+	struct module_data *m = &ctx->m;
+#endif
+	int loop_size = xxs->lpe - xxs->lps;
+
+	/* Reposition for next loop */
+	vi->pos -= loop_size;		/* forward loop */
+	vi->end = xxs->lpe;
+	vi->flags |= SAMPLE_LOOP;
+
+	if (xxs->flg & XMP_SAMPLE_LOOP_BIDIR) {
+		vi->end += loop_size;	/* unrolled loop */
+		vi->pos -= loop_size;	/* forward loop */
+
+#ifndef LIBXMP_CORE_DISABLE_IT
+		/* OpenMPT Bidi-Loops.it: "In Impulse Tracker’s software mixer,
+		 * ping-pong loops are shortened by one sample. 
+		 */
+		if (IS_PLAYER_MODE_IT()) {
+			vi->end--;
+			vi->pos++;
+		}
+#endif
+	}
+}
+
 
 /* Prepare the mixer for the next tick */
-void mixer_prepare(struct context_data *ctx)
+void libxmp_mixer_prepare(struct context_data *ctx)
 {
 	struct player_data *p = &ctx->p;
 	struct module_data *m = &ctx->m;
@@ -183,129 +324,10 @@ void mixer_prepare(struct context_data *ctx)
 	}
 	memset(s->buf32, 0, bytelen);
 }
-
-
-/* Hipolito's rampdown anticlick */
-static void rampdown(struct context_data *ctx, int voc, int32 *buf, int count)
-{
-	struct player_data *p = &ctx->p;
-	struct mixer_data *s = &ctx->s;
-	int smp_l, smp_r;
-	int dec_l, dec_r;
-
-	if (voc < 0) {
-		/* initialize */
-		smp_r = s->dtright;
-		smp_l = s->dtleft;
-	} else {
-		struct mixer_voice *vi = &p->virt.voice_array[voc];
-		smp_r = vi->sright;
-		smp_l = vi->sleft;
-		vi->sright = vi->sleft = 0;
-	}
-
-	if (smp_l == 0 && smp_r == 0) {
-		return;
-	}
-
-	if (buf == NULL) {
-		buf = s->buf32;
-		count = SLOW_RELEASE;
-	}
-
-	if (count <= 0) {
-		return;
-	}
-
-	dec_r = smp_r / count;
-	dec_l = smp_l / count;
-
-	while ((smp_r || smp_l) && count--) {
-		if (~s->format & XMP_FORMAT_MONO) {
-			if (dec_r > 0) {
-				if (smp_r > dec_r) {
-					smp_r -= dec_r;
-					*buf += smp_r;
-				} else {
-					smp_r = 0;
-				}
-			} else {
-				if (smp_r < dec_r) {
-					smp_r -= dec_r;
-					*buf += smp_r;
-				} else {
-					smp_r = 0;
-				}
-			}
-			buf++;
-		}
-
-		if (dec_l > 0) {
-			if (smp_l > dec_l) {
-				smp_l -= dec_l;
-				*buf += smp_l;
-			} else {
-				smp_l = 0;
-			}
-		} else {
-			if (smp_l < dec_l) {
-				smp_l -= dec_l;
-				*buf += smp_l;
-			} else {
-				smp_l = 0;
-			}
-		}
-		buf++;
-	}
-}
-
-
-/* Ok, it's messy, but it works :-) Hipolito */
-static void anticlick(struct context_data *ctx, int voc, int vol, int pan,
-		      int32 *buf, int count)
-{
-	int oldvol, newvol, pan0;
-	struct player_data *p = &ctx->p;
-	struct mixer_data *s = &ctx->s;
-	struct mixer_voice *vi = &p->virt.voice_array[voc];
-
-	/* From: Mirko Buffoni <mirbuf@gmail.com>
-	 * To: Claudio Matsuoka <cmatsuoka@gmail.com>
-	 * Date: Nov 29, 2007 6:45 AM
-	 *  
-	 * Put PAN SEPARATION to 100. Then it crashes. Other modules crash when
-	 * PAN SEPARATION = 100, (...) moving separation one step behind, stop
-	 * crashes.
-	 */
-	pan0 = vi->pan;
-	if (pan0 < -127) {
-		pan0 = -127;
-	}
-
-	if (vi->vol) {
-		oldvol = vi->vol * (0x80 - pan0);
-		newvol = vol * (0x80 - pan);
-		vi->sright -= (int64)vi->sright * newvol / oldvol;
-
-		oldvol = vi->vol * (0x80 + pan0);
-		newvol = vol * (0x80 + pan);
-		vi->sleft -= (int64)vi->sleft * newvol / oldvol;
-	}
-
-	if (!buf) {
-		s->dtright += vi->sright;
-		s->dtleft += vi->sleft;
-		vi->sright = vi->sleft = 0;
-	} else {
-		rampdown(ctx, voc, buf, count);
-	}
-}
-
-
 /* Fill the output buffer calling one of the handlers. The buffer contains
  * sound for one tick (a PAL frame or 1/50s for standard vblank-timed mods)
  */
-void mixer_softmixer(struct context_data *ctx)
+void libxmp_mixer_softmixer(struct context_data *ctx)
 {
 	struct player_data *p = &ctx->p;
 	struct mixer_data *s = &ctx->s;
@@ -313,15 +335,13 @@ void mixer_softmixer(struct context_data *ctx)
 	struct xmp_module *mod = &m->mod;
 	struct xmp_sample *xxs;
 	struct mixer_voice *vi;
+	double step;
 	int samples, size;
-	int vol_l, vol_r, step, voc;
-	int prev_l, prev_r;
+	int vol_l, vol_r, voc, usmp;
+	int prev_l, prev_r = 0;
 	int lps, lpe;
-#ifndef LIBXMP_CORE_PLAYER
-	int synth = 1;
-#endif
 	int32 *buf_pos;
-	void (*mix_fn)(struct mixer_voice *, int *, int, int, int, int);
+	void (*mix_fn)(struct mixer_voice *, int *, int, int, int, int, int, int, int);
 	mixer_set *mixers;
 
 	switch (s->interp) {
@@ -338,49 +358,77 @@ void mixer_softmixer(struct context_data *ctx)
 		mixers = &linear_mixers;
 	}
 
-	mixer_prepare(ctx);
+#ifdef LIBXMP_PAULA_SIMULATOR
+	if (p->flags & XMP_FLAGS_A500) {
+		if (IS_AMIGA_MOD()) {
+			if (p->filter) {
+				mixers = &a500led_mixers;
+			} else {
+				mixers = &a500_mixers;
+			}
+		}
+	}
+#endif
 
-	rampdown(ctx, -1, NULL, 0);	/* Anti-click */
+	libxmp_mixer_prepare(ctx);
 
 	for (voc = 0; voc < p->virt.maxvoc; voc++) {
+		int c5spd;
+
 		vi = &p->virt.voice_array[voc];
 
-		if (vi->chn < 0)
+		if (vi->flags & ANTICLICK) {
+			if (s->interp > XMP_INTERP_NEAREST) {
+				do_anticlick(ctx, voc, NULL, 0);
+			}
+			vi->flags &= ~ANTICLICK;
+		}
+
+		if (vi->chn < 0) {
 			continue;
+		}
 
 		if (vi->period < 1) {
-			virt_resetvoice(ctx, voc, 1);
+			libxmp_virt_resetvoice(ctx, voc, 1);
 			continue;
 		}
 
 		vi->pos0 = vi->pos;
 
 		buf_pos = s->buf32;
-		vol_r = vi->vol * (0x80 - vi->pan);
-		vol_l = vi->vol * (0x80 + vi->pan);
-
-#ifndef LIBXMP_CORE_PLAYER
-		if (vi->fidx & FLAG_SYNTH) {
-			if (synth) {
-				m->synth->mixer(ctx, buf_pos, s->ticksize,
-						vol_l >> 7, vol_r >> 7,
-						vi->fidx & FLAG_STEREO);
-				synth = 0;
-			}
-			continue;
-		}
-#endif
-
-		step = ((int64)s->pbase << 24) / vi->period;
-
-		if (step == 0) {	/* otherwise m5v-nwlf.it crashes */
-			continue;
+		if (vi->pan == PAN_SURROUND) {
+			vol_r = vi->vol * 0x80;
+			vol_l = -vi->vol * 0x80;
+		} else {
+			vol_r = vi->vol * (0x80 - vi->pan);
+			vol_l = vi->vol * (0x80 + vi->pan);
 		}
 
-		if (vi->smp < mod->smp)
+		if (vi->smp < mod->smp) {
 			xxs = &mod->xxs[vi->smp];
-		else
+			c5spd = m->xtra[vi->smp].c5spd;
+		} else {
 			xxs = &ctx->smix.xxs[vi->smp - mod->smp];
+			c5spd = m->c4rate;
+		}
+
+		step = C4_PERIOD * c5spd / s->freq / vi->period;
+
+		if (step < 0.001) {	/* otherwise m5v-nwlf.it crashes */
+			continue;
+		}
+
+#ifndef LIBXMP_CORE_DISABLE_IT
+		if (xxs->flg & XMP_SAMPLE_SLOOP && vi->smp < mod->smp) {
+			if (~vi->flags & VOICE_RELEASE) {
+				if (vi->pos < m->xsmp[vi->smp].lpe) {
+					xxs = &m->xsmp[vi->smp];
+				}
+			}
+		}
+
+		adjust_voice_end(vi, xxs);
+#endif
 
 		lps = xxs->lps;
 		lpe = xxs->lpe;
@@ -389,23 +437,47 @@ void mixer_softmixer(struct context_data *ctx)
 			lps >>= 1;
 		}
 
+		if (xxs->flg & XMP_SAMPLE_LOOP_BIDIR) {
+			vi->end += lpe - lps;
+
+#ifndef LIBXMP_CORE_DISABLE_IT
+			if (IS_PLAYER_MODE_IT()) {
+				vi->end--;
+			}
+#endif
+		}
+
+		int rampsize = s->ticksize >> ANTICLICK_SHIFT;
+		int delta_l = (vol_l - vi->old_vl) / rampsize;
+		int delta_r = (vol_r - vi->old_vr) / rampsize;
+
+		usmp = 0;
 		for (size = s->ticksize; size > 0; ) {
+			int split_noloop = 0;
+
+			if (p->xc_data[vi->chn].split) {
+				split_noloop = 1;
+			}
+
 			/* How many samples we can write before the loop break
 			 * or sample end... */
 			if (vi->pos >= vi->end) {
 				samples = 0;
+				usmp = 1;
 			} else {
-				samples = 1 + (((int64)(vi->end - vi->pos) <<
-					SMIX_SHIFT) - vi->frac) / step;
-			}
+				int s = ceil(((double)vi->end - vi->pos) / step);
+				/* ...inside the tick boundaries */
+				if (s > size) {
+					s = size;
+				}
 
-			/* ...inside the tick boundaries */
-			if (samples > size) {
-				samples = size;
+				samples = s;
+				if (samples > 0) {
+					usmp = 0;
+				}
 			}
 
 			if (vi->vol) {
-				int idx;
 				int mix_size = samples;
 				int mixer = vi->fidx & FIDX_FLAGMASK;
 
@@ -414,64 +486,86 @@ void mixer_softmixer(struct context_data *ctx)
 				}
 
 				/* For Hipolito's anticlick routine */
-				idx = mix_size;
-				if (mix_size >= 2) {
-					prev_r = buf_pos[idx - 2];
-					prev_l = buf_pos[idx - 1];
+				if (samples > 0) {
+					if (~s->format & XMP_FORMAT_MONO) {
+						prev_r = buf_pos[mix_size - 2];
+					}
+					prev_l = buf_pos[mix_size - 1];
 				} else {
 					prev_r = prev_l = 0;
 				}
 
 #ifndef LIBXMP_CORE_DISABLE_IT
-				/* "Beautiful Ones" apparently uses 0xfe as
-				 * 'no filter' :\ */
-				if (vi->filter.cutoff >= 0xfe)
+				/* See OpenMPT env-flt-max.it */
+				if (vi->filter.cutoff >= 0xfe &&
+                                    vi->filter.resonance == 0) {
 					mixer &= ~FLAG_FILTER;
+				}
 #endif
 
 				mix_fn = (*mixers)[mixer];
 
 				/* Call the output handler */
-				if (samples >= 0) {
-					mix_fn(vi, buf_pos, samples, vol_l,
-								vol_r, step);
-					buf_pos += mix_size;
-				}
+				if (samples > 0 && vi->sptr != NULL) {
+					int rsize = 0;
 
-				/* For Hipolito's anticlick routine */
-				idx = 0;
-				if (mix_size >= 2) {
-					vi->sright = buf_pos[idx - 2] - prev_r;
-					vi->sleft = buf_pos[idx - 1] - prev_l;
+					if (rampsize > samples) {
+						rampsize -= samples;
+					} else {
+						rsize = samples - rampsize;
+						rampsize = 0;
+					}
+
+					if (delta_l == 0 && delta_r == 0) {
+						/* no need to ramp */
+						rsize = samples;
+					}
+
+					if (mix_fn != NULL) {
+						mix_fn(vi, buf_pos, samples,
+							vol_l >> 8, vol_r >> 8, step * (1 << SMIX_SHIFT), rsize, delta_l, delta_r);
+					}
+
+					buf_pos += mix_size;
+					vi->old_vl += samples * delta_l;
+					vi->old_vr += samples * delta_r;
+
+
+					/* For Hipolito's anticlick routine */
+					if (~s->format & XMP_FORMAT_MONO) {
+						vi->sright = buf_pos[-2] - prev_r;
+					}
+					vi->sleft = buf_pos[-1] - prev_l;
 				}
 			}
 
-			vi->frac += step * samples;
-			vi->pos += vi->frac >> SMIX_SHIFT;
-			vi->frac &= SMIX_MASK;
+			vi->pos += step * samples;
 
 			/* No more samples in this tick */
-			size -= samples;
-			if (size <= 0)
+			size -= samples + usmp;
+			if (size <= 0) {
+				if (xxs->flg & XMP_SAMPLE_LOOP) {
+					if (vi->pos + step > vi->end) {
+						vi->pos += step;
+						loop_reposition(ctx, vi, xxs);
+					}
+				}
 				continue;
+			}
 
 			/* First sample loop run */
-			if (~xxs->flg & XMP_SAMPLE_LOOP) {
-				anticlick(ctx, voc, 0, 0, buf_pos, size);
-				virt_resetvoice(ctx, voc, 0);
+			if ((~xxs->flg & XMP_SAMPLE_LOOP) || split_noloop) {
+				do_anticlick(ctx, voc, buf_pos, size);
+				set_sample_end(ctx, voc, 1);
 				size = 0;
 				continue;
 			}
 
-			vi->pos -= lpe - lps;	/* forward loop */
-			vi->end = lpe;
-			vi->sample_loop = 1;
-
-			if (xxs->flg & XMP_SAMPLE_LOOP_BIDIR) {
-				vi->end += lpe - lps;
-				vi->pos -= lpe - lps;	/* forward loop */
-			}
+			loop_reposition(ctx, vi, xxs);
 		}
+
+		vi->old_vl = vol_l;
+		vi->old_vr = vol_r;
 	}
 
 	/* Render final frame */
@@ -496,7 +590,7 @@ void mixer_softmixer(struct context_data *ctx)
 	s->dtright = s->dtleft = 0;
 }
 
-void mixer_voicepos(struct context_data *ctx, int voc, int pos, int frac)
+void libxmp_mixer_voicepos(struct context_data *ctx, int voc, double pos, int ac)
 {
 	struct player_data *p = &ctx->p;
 	struct module_data *m = &ctx->m;
@@ -514,22 +608,17 @@ void mixer_voicepos(struct context_data *ctx, int voc, int pos, int frac)
 		return;
 	}
 
-	if (xxs->flg & XMP_SAMPLE_LOOP) {
-		if ((xxs->flg & XMP_SAMPLE_LOOP_FULL) && vi->sample_loop == 0) {
-			vi->end = xxs->len;
-		} else {
-			vi->end = xxs->lpe;
-		}
-	} else {
-		vi->end = xxs->len;
-	}
-
-	if (pos >= vi->end) {		/* Happens often in MED synth */
-		pos = 0;
-	}
-
 	vi->pos = pos;
-	vi->frac = frac;
+
+	adjust_voice_end(vi, xxs);
+
+	if (vi->pos >= vi->end) {
+		if (xxs->flg & XMP_SAMPLE_LOOP) {
+			vi->pos = xxs->lps;
+		} else {
+			vi->pos = xxs->len;
+		}
+	}
 
 	lps = xxs->lps;
 	if (p->flags & XMP_FLAGS_FIXLOOP) {
@@ -538,18 +627,26 @@ void mixer_voicepos(struct context_data *ctx, int voc, int pos, int frac)
 
 	if (xxs->flg & XMP_SAMPLE_LOOP_BIDIR) {
 		vi->end += (xxs->lpe - lps);
+
+#ifndef LIBXMP_CORE_DISABLE_IT
+		if (IS_PLAYER_MODE_IT()) {
+			vi->end--;
+		}
+#endif
 	}
 
-	vi->attack = SLOW_ATTACK;
+	if (ac) {
+		anticlick(vi);
+	}
 }
 
-int mixer_getvoicepos(struct context_data *ctx, int voc)
+double libxmp_mixer_getvoicepos(struct context_data *ctx, int voc)
 {
 	struct player_data *p = &ctx->p;
 	struct mixer_voice *vi = &p->virt.voice_array[voc];
 	struct xmp_sample *xxs;
 
-	xxs = get_sample(ctx, vi->smp);
+	xxs = libxmp_get_sample(ctx, vi->smp);
 
 	if (xxs->flg & XMP_SAMPLE_SYNTH) {
 		return 0;
@@ -564,7 +661,7 @@ int mixer_getvoicepos(struct context_data *ctx, int voc)
 	return vi->pos;
 }
 
-void mixer_setpatch(struct context_data *ctx, int voc, int smp)
+void libxmp_mixer_setpatch(struct context_data *ctx, int voc, int smp, int ac)
 {
 	struct player_data *p = &ctx->p;
 #ifndef LIBXMP_CORE_DISABLE_IT
@@ -574,12 +671,12 @@ void mixer_setpatch(struct context_data *ctx, int voc, int smp)
 	struct mixer_voice *vi = &p->virt.voice_array[voc];
 	struct xmp_sample *xxs;
 
-	xxs = get_sample(ctx, smp);
+	xxs = libxmp_get_sample(ctx, smp);
 
 	vi->smp = smp;
 	vi->vol = 0;
 	vi->pan = 0;
-	vi->sample_loop = 0;
+	vi->flags &= ~SAMPLE_LOOP;
 
 	vi->fidx = 0;
 
@@ -587,15 +684,9 @@ void mixer_setpatch(struct context_data *ctx, int voc, int smp)
 		vi->fidx |= FLAG_STEREO;
 	}
 
-#ifndef LIBXMP_CORE_PLAYER
-	if (xxs->flg & XMP_SAMPLE_SYNTH) {
-		vi->fidx |= FLAG_SYNTH;
-		m->synth->setpatch(ctx, voc, xxs->data);
-		return;
-	}
-#endif
+	set_sample_end(ctx, voc, 0);
 
-	mixer_setvol(ctx, voc, 0);
+	/*mixer_setvol(ctx, voc, 0);*/
 
 	vi->sptr = xxs->data;
 	vi->fidx |= FLAG_ACTIVE;
@@ -610,58 +701,60 @@ void mixer_setpatch(struct context_data *ctx, int voc, int smp)
 		vi->fidx |= FLAG_16_BITS;
 	}
 
-	mixer_voicepos(ctx, voc, 0, 0);
+	libxmp_mixer_voicepos(ctx, voc, 0, ac);
 }
 
-void mixer_setnote(struct context_data *ctx, int voc, int note)
+void libxmp_mixer_setnote(struct context_data *ctx, int voc, int note)
 {
 	struct player_data *p = &ctx->p;
 	struct mixer_voice *vi = &p->virt.voice_array[voc];
+
+	/* FIXME: Workaround for crash on notes that are too high
+	 *        see 6nations.it (+114 transposition on instrument 16)
+	 */
+	if (note > 149) {
+		note = 149;
+	}
 
 	vi->note = note;
-	vi->period = note_to_period_mix(note, 0);
-	vi->attack = SLOW_ATTACK;
+	vi->period = libxmp_note_to_period_mix(note, 0);
+
+	anticlick(vi);
 }
 
-void mixer_setbend(struct context_data *ctx, int voc, int bend)
+void libxmp_mixer_setperiod(struct context_data *ctx, int voc, double period)
 {
 	struct player_data *p = &ctx->p;
 	struct mixer_voice *vi = &p->virt.voice_array[voc];
-#ifndef LIBXMP_CORE_PLAYER
-	struct module_data *m = &ctx->m;
-#endif
 
-	vi->period = note_to_period_mix(vi->note, bend);
+	vi->period = period;
+}
 
-#ifndef LIBXMP_CORE_PLAYER
-	if (vi->fidx & FLAG_SYNTH) {
-		m->synth->setnote(ctx, voc, vi->note, bend >> 7);
+void libxmp_mixer_setvol(struct context_data *ctx, int voc, int vol)
+{
+	struct player_data *p = &ctx->p;
+	struct mixer_voice *vi = &p->virt.voice_array[voc];
+
+	if (vol == 0) {
+		anticlick(vi);
 	}
-#endif
-}
-
-void mixer_setvol(struct context_data *ctx, int voc, int vol)
-{
-	struct player_data *p = &ctx->p;
-	struct mixer_data *s = &ctx->s;
-	struct mixer_voice *vi = &p->virt.voice_array[voc];
-#ifndef LIBXMP_CORE_PLAYER
-	struct module_data *m = &ctx->m;
-#endif
-
-	if (s->interp > XMP_INTERP_NEAREST)
-		anticlick(ctx, voc, vol, vi->pan, NULL, 0);
 
 	vi->vol = vol;
-
-#ifndef LIBXMP_CORE_PLAYER
-	if (vi->fidx & FLAG_SYNTH) {
-		m->synth->setvol(ctx, voc, vol >> 4);
-	}
-#endif
 }
 
-void mixer_seteffect(struct context_data *ctx, int voc, int type, int val)
+void libxmp_mixer_release(struct context_data *ctx, int voc, int rel)
+{
+	struct player_data *p = &ctx->p;
+	struct mixer_voice *vi = &p->virt.voice_array[voc];
+
+	if (rel) {
+		vi->flags |= VOICE_RELEASE;
+	} else {
+		vi->flags &= ~VOICE_RELEASE;
+	}
+}
+
+void libxmp_mixer_seteffect(struct context_data *ctx, int voc, int type, int val)
 {
 #ifndef LIBXMP_CORE_DISABLE_IT
 	struct player_data *p = &ctx->p;
@@ -687,7 +780,7 @@ void mixer_seteffect(struct context_data *ctx, int voc, int type, int val)
 #endif
 }
 
-void mixer_setpan(struct context_data *ctx, int voc, int pan)
+void libxmp_mixer_setpan(struct context_data *ctx, int voc, int pan)
 {
 	struct player_data *p = &ctx->p;
 	struct mixer_voice *vi = &p->virt.voice_array[voc];
@@ -695,7 +788,7 @@ void mixer_setpan(struct context_data *ctx, int voc, int pan)
 	vi->pan = pan;
 }
 
-int mixer_numvoices(struct context_data *ctx, int num)
+int libxmp_mixer_numvoices(struct context_data *ctx, int num)
 {
 	struct mixer_data *s = &ctx->s;
 
@@ -706,7 +799,7 @@ int mixer_numvoices(struct context_data *ctx, int num)
 	}
 }
 
-int mixer_on(struct context_data *ctx, int rate, int format, int c4rate)
+int libxmp_mixer_on(struct context_data *ctx, int rate, int format, int c4rate)
 {
 	struct mixer_data *s = &ctx->s;
 
@@ -722,10 +815,10 @@ int mixer_on(struct context_data *ctx, int rate, int format, int c4rate)
 	s->format = format;
 	s->amplify = DEFAULT_AMPLIFY;
 	s->mix = DEFAULT_MIX;
-	s->pbase = SMIX_C4NOTE * c4rate / s->freq;
+	/* s->pbase = C4_PERIOD * c4rate / s->freq; */
 	s->interp = XMP_INTERP_LINEAR;	/* default interpolation type */
 	s->dsp = XMP_DSP_LOWPASS;	/* enable filters by default */
-	s->numvoc = SMIX_NUMVOC;
+	/* s->numvoc = SMIX_NUMVOC; */
 	s->dtright = s->dtleft = 0;
 
 	return 0;
@@ -736,7 +829,7 @@ int mixer_on(struct context_data *ctx, int rate, int format, int c4rate)
 	return -1;
 }
 
-void mixer_off(struct context_data *ctx)
+void libxmp_mixer_off(struct context_data *ctx)
 {
 	struct mixer_data *s = &ctx->s;
 

@@ -1,5 +1,5 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * This file is part of the Extended Module Player and is distributed
  * under the terms of the GNU Lesser General Public License. See COPYING.LIB
@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include "common.h"
 #include "inflate.h"
+#include "depacker.h"
 #include "crc32.h"
 
 /* See RFC1952 for further information */
@@ -41,60 +42,67 @@ struct member {
 	uint8 os;
 };
 
-int decrunch_gzip(FILE *in, FILE *out)
+static int test_gzip(unsigned char *b)
+{
+	return b[0] == 31 && b[1] == 139;
+}
+
+static int decrunch_gzip(FILE *in, FILE *out)
 {
 	struct member member;
 	int val, c;
 	uint32 crc;
 
-	crc32_init_A();
+	libxmp_crc32_init_A();
 
-	member.id1 = read8(in);
-	member.id2 = read8(in);
-	member.cm  = read8(in);
-	member.flg = read8(in);
-	member.mtime = read32l(in);
-	member.xfl = read8(in);
-	member.os  = read8(in);
+	member.id1 = read8(in, NULL);
+	member.id2 = read8(in, NULL);
+	member.cm  = read8(in, NULL);
+	member.flg = read8(in, NULL);
+	member.mtime = read32l(in, NULL);
+	member.xfl = read8(in, NULL);
+	member.os  = read8(in, NULL);
 
 	if (member.cm != 0x08) {
 		return -1;
 	}
 
 	if (member.flg & FLAG_FEXTRA) {
-		int xlen = read16l(in);
-		fseek(in, xlen, SEEK_CUR);
+		int xlen = read16l(in, NULL);
+		if (fseek(in, xlen, SEEK_CUR) < 0) {
+			return -1;
+		}
 	}
 
 	if (member.flg & FLAG_FNAME) {
 		do {
-			c = read8(in);
+			c = read8(in, NULL);
 		} while (c != 0);
 	}
 
 	if (member.flg & FLAG_FCOMMENT) {
 		do {
-			c = read8(in);
+			c = read8(in, NULL);
 		} while (c != 0);
 	}
 
 	if (member.flg & FLAG_FHCRC) {
-		read16l(in);
+		read16l(in, NULL);
 	}
 	
-	val = inflate(in, out, &crc, 1);
+	val = libxmp_inflate(in, out, &crc, 1);
 	if (val != 0) {
 		return -1;
 	}
 
 	/* Check CRC32 */
-	val = read32l(in);
+	val = read32l(in, NULL);
 	if (val != crc) {
 		return -1;
 	}
 
 	/* Check file size */
-	val = read32l(in);
+	val = read32l(in, NULL);
 	if (val != ftell(out)) {
 		return -1;
 	}
@@ -102,3 +110,7 @@ int decrunch_gzip(FILE *in, FILE *out)
 	return 0;
 }
 
+struct depacker libxmp_depacker_gzip = {
+	test_gzip,
+	decrunch_gzip
+};

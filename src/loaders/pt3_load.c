@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 #include <stdio.h>
@@ -20,7 +34,7 @@ static int pt3_test(HIO_HANDLE *, char *, const int);
 static int pt3_load(struct module_data *, HIO_HANDLE *, const int);
 static int ptdt_load(struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader pt3_loader = {
+const struct format_loader libxmp_loader_pt3 = {
 	"Protracker 3",
 	pt3_test,
 	pt3_load
@@ -45,9 +59,9 @@ static int pt3_test(HIO_HANDLE *f, char *t, const int start)
 	
 	if (hio_read32b(f) == MAGIC_INFO) {
 		hio_read32b(f);	/* skip size */
-		read_title(f, t, 32);
+		libxmp_read_title(f, t, 32);
 	} else {
-		read_title(f, t, 0);
+		libxmp_read_title(f, t, 0);
 	}
 
 	return 0;
@@ -66,7 +80,7 @@ static int pt3_test(HIO_HANDLE *f, char *t, const int start)
 static int get_info(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 {
 	struct xmp_module *mod = &m->mod;
-	int flags;
+	/* int flags; */
 	/* int day, month, year, hour, min, sec;
 	int dhour, dmin, dsec; */
 
@@ -76,7 +90,7 @@ static int get_info(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	mod->pat = hio_read16b(f);
 	mod->gvl = hio_read16b(f);
 	mod->bpm = hio_read16b(f);
-	flags = hio_read16b(f);
+	/*flags =*/ hio_read16b(f);
 	/*day   =*/ hio_read16b(f);
 	/*month =*/ hio_read16b(f);
 	/*year  =*/ hio_read16b(f);
@@ -86,6 +100,11 @@ static int get_info(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	/*dhour =*/ hio_read16b(f);
 	/*dmin  =*/ hio_read16b(f);
 	/*dsec  =*/ hio_read16b(f);
+
+	/* Sanity check */
+	if (mod->ins > 255 || mod->len > 256 || mod->pat > 255) {
+		return -1;
+	}
 
 	MODULE_INFO();
 
@@ -125,29 +144,34 @@ static int pt3_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	hio_read32b(f);		/* VERS size */
 
 	hio_read(buf, 1, 10, f);
-	set_type(m, "%-6.6s IFFMODL", buf + 4);
+	libxmp_set_type(m, "%-6.6s IFFMODL", buf + 4);
 
-	handle = iff_new();
+	handle = libxmp_iff_new();
 	if (handle == NULL)
 		return -1;
 
 	/* IFF chunk IDs */
-	ret = iff_register(handle, "INFO", get_info);
-	ret |= iff_register(handle, "CMNT", get_cmnt);
-	ret |= iff_register(handle, "PTDT", get_ptdt);
+	ret = libxmp_iff_register(handle, "INFO", get_info);
+	ret |= libxmp_iff_register(handle, "CMNT", get_cmnt);
+	ret |= libxmp_iff_register(handle, "PTDT", get_ptdt);
 
 	if (ret != 0)
 		return -1;
 
-	iff_set_quirk(handle, IFF_FULL_CHUNK_SIZE);
+	libxmp_iff_set_quirk(handle, IFF_FULL_CHUNK_SIZE);
 
 	/* Load IFF chunks */
-	if (iff_load(handle, m, f, NULL) < 0) {
-		iff_release(handle);
+	if (libxmp_iff_load(handle, m, f, NULL) < 0) {
+		libxmp_iff_release(handle);
 		return -1;
 	}
 
-	iff_release(handle);
+	libxmp_iff_release(handle);
+
+	/* Sanity check */
+	if (m->mod.smp <= 0) {
+		return -1;
+	}
 
 	return 0;
 }
@@ -189,11 +213,11 @@ static int ptdt_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	mod->pat++;
 	mod->trk = mod->chn * mod->pat;
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	for (i = 0; i < mod->ins; i++) {
-		if (subinstrument_alloc(mod, i, 1) < 0)
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 			return -1;
 
 		mod->xxs[i].len = 2 * mh.ins[i].size;
@@ -210,7 +234,7 @@ static int ptdt_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		mod->xxi[i].sub[0].sid = i;
 		mod->xxi[i].rls = 0xfff;
 
-		instrument_name(mod, i, mh.ins[i].name, 22);
+		libxmp_instrument_name(mod, i, mh.ins[i].name, 22);
 
 		D_(D_INFO "[%2X] %-22.22s %04x %04x %04x %c V%02x %+d",
 				i, mod->xxi[i].name,
@@ -221,24 +245,24 @@ static int ptdt_load(struct module_data *m, HIO_HANDLE *f, const int start)
 				mod->xxi[i].sub[0].fin >> 4);
 	}
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	/* Load and convert patterns */
 	D_(D_INFO "Stored patterns: %d", mod->pat);
 
 	for (i = 0; i < mod->pat; i++) {
-		if (pattern_tracks_alloc(mod, i, 64) < 0)
+		if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 			return -1;
 
 		for (j = 0; j < (64 * 4); j++) {
 			event = &EVENT(i, j % 4, j / 4);
 			hio_read(mod_event, 1, 4, f);
-			decode_protracker_event(event, mod_event);
+			libxmp_decode_protracker_event(event, mod_event);
 		}
 	}
 
-	m->quirk |= QUIRK_MODRNG;
+	m->period_type = PERIOD_MODRNG;
 
 	/* Load samples */
 	D_(D_INFO "Stored samples: %d", mod->smp);
@@ -247,7 +271,7 @@ static int ptdt_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		if (!mod->xxs[i].len)
 			continue;
 
-		if (load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
+		if (libxmp_load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
 			return -1;
 	}
 

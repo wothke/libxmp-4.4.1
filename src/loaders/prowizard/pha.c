@@ -1,9 +1,10 @@
 /*
  * PhaPacker.c   Copyright (C) 1996-1999 Asle / ReDoX
- *               Copyright (C) 2006-2007 Claudio Matsuoka
  *
  * Converts PHA packed MODs back to PTK MODs
  * nth revision :(.
+ *
+ * Modified in 2006,2007,2014 by Claudio Matsuoka
  */
 
 #include <string.h>
@@ -11,7 +12,7 @@
 #include "prowiz.h"
 
 
-static int depack_pha(FILE *in, FILE *out)
+static int depack_pha(HIO_HANDLE *in, FILE *out)
 {
 	uint8 c1, c2;
 	uint8 pnum[128];
@@ -26,7 +27,7 @@ static int depack_pha(FILE *in, FILE *out)
 	int i, j, k;
 	int paddr1[128];
 	int paddr2[128];
-	int tmp_ptr, tmp1, tmp2;
+	int tmp_ptr, tmp;
 	int pat_addr;
 	int psize;
 	int size, ssize = 0;
@@ -41,33 +42,37 @@ static int depack_pha(FILE *in, FILE *out)
 	memset(onote, 0, 4 * 4);
 	memset(ocpt, 0, 4 * 2);
 
-	pw_write_zero(out, 20);			/* title */
+	pw_write_zero(out, 20);				/* title */
 
 	for (i = 0; i < 31; i++) {
-		pw_write_zero(out, 22);			/*sample name */
-		write16b(out, size = read16b(in));	/* size */
+		int vol, fin, lps, lsz;
+
+		pw_write_zero(out, 22);			/* sample name */
+		write16b(out, size = hio_read16b(in));	/* size */
 		ssize += size * 2;
-		read8(in);
-		write8(out, 0);				/* finetune byte */
-		write8(out, read8(in));			/* volume */
-		write16b(out, read16b(in));		/* loop start */
-		write16b(out, read16b(in));		/* loop size */
+		hio_read8(in);				/* ??? */
+		
+		vol = hio_read8(in);			/* volume */
+		lps = hio_read16b(in);			/* loop start */
+		lsz = hio_read16b(in);			/* loop size */
+		hio_read32b(in);			/* sample address */
+		hio_read8(in);				/* ??? */
 
-		read32b(in);
+		fin = hio_read8(in);			/* finetune - 11 */
+		if (fin != 0) {
+			fin += 11;
+		}
+		write8(out, fin);
+		write8(out, vol);
+		write16b(out, lps);
+		write16b(out, lsz);
 
-		c1 = read8(in);
-		if(c1 != 0x00)
-			c1 += 0x0b;
-		fseek(out, -6, SEEK_END);
-		write8(out, c1);
-		fseek(out, 0, SEEK_END);
-		fseek(in, 1, SEEK_CUR);
 	}
 
-	fseek(in, 14, SEEK_CUR);		/* bypass unknown 14 bytes */
+	hio_seek(in, 14, SEEK_CUR);		/* bypass unknown 14 bytes */
 
 	for (i = 0; i < 128; i++)
-		paddr[i] = read32b(in);
+		paddr[i] = hio_read32b(in);
 
 	/* ordering of patterns addresses */
 
@@ -97,12 +102,13 @@ restart:
 	for (i = 0; i < 128; i++) {
 		for (j = 0; j < i; j++) {
 			if (paddr1[i] < paddr1[j]) {
-				tmp2 = pnum[j];
+				tmp = pnum[j];
 				pnum[j] = pnum[i];
-				pnum[i] = tmp2;
-				tmp1 = paddr1[j];
+				pnum[i] = tmp;
+
+				tmp = paddr1[j];
 				paddr1[j] = paddr1[i];
-				paddr1[i] = tmp1;
+				paddr1[i] = tmp;
 				goto restart;
 			}
 		}
@@ -135,10 +141,11 @@ restart:
 	}
 
 	for (c1 = 0; c1 < 128; c1++) {
-		for (c2 = 0; c2 < 128; c2++)
+		for (c2 = 0; c2 < 128; c2++) {
 			if (paddr[c1] == paddr1[c2]) {
 				pnum1[c1] = c2;
 			}
+		}
 	}
 
 	memset(pnum, 0, 128);
@@ -170,8 +177,8 @@ restart:
 
 	write32b(out, PW_MOD_MAGIC);		/* ID string */
 
-	smp_addr = ftell(in);
-	fseek(in, pat_addr, SEEK_SET);
+	smp_addr = hio_tell(in);
+	hio_seek(in, pat_addr, SEEK_SET);
 
 	/* pattern datas */
 	/* read ALL pattern data */
@@ -185,7 +192,7 @@ restart:
 #endif
 	psize = npat * 1024;
 	pdata = (uint8 *) malloc (psize);
-	psize = fread(pdata, 1, psize, in);
+	psize = hio_read(pdata, 1, psize, in);
 	npat += 1;		/* coz first value is $00 */
 	pat = (uint8 *)malloc(npat * 1024);
 	memset(pat, 0, npat * 1024);
@@ -238,16 +245,16 @@ restart:
 	free(pat);
 
 	/* Sample data */
-	fseek(in, smp_addr, SEEK_SET);
+	hio_seek(in, smp_addr, SEEK_SET);
 	pw_move_data(out, in, ssize);
 
 	return 0;
 }
 
-static int test_pha (uint8 *data, char *t, int s)
+static int test_pha(uint8 *data, char *t, int s)
 {
-	int j, k, l, m, n;
-	int start = 0, ssize;
+	int i;
+	int ptr, ssize;
 
 	PW_REQUEST_DATA(s, 451 + 128 * 4);
 
@@ -255,47 +262,38 @@ static int test_pha (uint8 *data, char *t, int s)
 		return -1;
 
 	/* test #2 (volumes,sample addresses and whole sample size) */
-	l = 0;
-	for (j = 0; j < 31; j++) {
-		/* sample size */
-		n = readmem16b(data + start + j * 14) * 2;
-		l += n;
+	ssize = 0;
+	for (i = 0; i < 31; i++) {
+		uint8 *d = data + i * 14;
 
-		if (data[start + j * 14 + 3] > 0x40)
+		/* sample size */
+		ssize += readmem16b(d) << 1;
+
+		if (d[3] > 0x40)
 			return -1;
 
 		/* loop start */
-		m = readmem16b(data + start + j * 14 + 4) * 2;
-
-		if (m > l)
+		if ((readmem16b(d + 4) << 1) > ssize)
 			return -1;
 
 		/* address of sample data */
-		k = readmem32b(data + start + j * 14 + 8);
-
-		if (k < 0x3C0)
+		if (readmem32b(d + 8) < 0x3c0)
 			return -1;
 	}
 
-	if (l <= 2 || l > (31 * 65535))
+	if (ssize <= 2 || ssize > 31 * 65535)
 		return -1;
 
 	/* test #3 (addresses of pattern in file ... ptk_tableible ?) */
 	/* l is the whole sample size */
 	/* ssize is used here as a variable ... set to 0 afterward */
-	l += 960;
-	k = 0;
-	for (j = 0; j < 128; j++) {
-		ssize = readmem32b(data + start + 448 + j * 4);
 
-		if (ssize > k)
-			k = ssize;
+	for (i = 0; i < 128; i++) {
+		ptr = readmem32b(data + 448 + i * 4);
 
-		if ((ssize + 2) < l)
+		if (ptr + 2 - 960 < ssize)
 			return -1;
 	}
-	ssize = 0;
-	/* k is the highest pattern data address */
 
 	pw_read_title(NULL, t, 0);
 

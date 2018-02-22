@@ -1,8 +1,9 @@
 /*
  * gmc.c    Copyright (C) 1997 Sylvain "Asle" Chipaux
- *          Copyright (C) 2006-2007 Claudio Matsuoka
  *
  * Depacks musics in the Game Music Creator format and saves in ptk.
+ *
+ * Modified in 2006,2007,2014 by Claudio Matsuoka
  */
 
 #include <string.h>
@@ -10,12 +11,12 @@
 #include "prowiz.h"
 
 
-static int depack_GMC(FILE *in, FILE *out)
+static int depack_GMC(HIO_HANDLE *in, FILE *out)
 {
 	uint8 tmp[1024];
 	uint8 ptable[128];
 	uint8 max;
-	uint8 PatPos;
+	uint8 pat_pos;
 	uint16 len, looplen;
 	long ssize = 0;
 	long i = 0, j = 0;
@@ -26,18 +27,19 @@ static int depack_GMC(FILE *in, FILE *out)
 
 	for (i = 0; i < 15; i++) {
 		pw_write_zero(out, 22);		/* name */
-		read32b(in);			/* bypass 4 address bytes */
-		write16b(out, len = read16b(in));	/* size */
+		hio_read32b(in);		/* bypass 4 address bytes */
+		len = hio_read16b(in);
+		write16b(out, len);		/* size */
 		ssize += len * 2;
-		read8(in);
+		hio_read8(in);
 		write8(out, 0);			/* finetune */
-		write8(out, read8(in));		/* volume */
-		read32b(in);			/* bypass 4 address bytes */
+		write8(out, hio_read8(in));	/* volume */
+		hio_read32b(in);		/* bypass 4 address bytes */
 
-		looplen = read16b(in);		/* loop size */
+		looplen = hio_read16b(in);	/* loop size */
 		write16b(out, looplen > 2 ? len - looplen : 0);
 		write16b(out, looplen <= 2 ? 1 : looplen);
-		read16b(in);	/* always zero? */
+		hio_read16b(in);		/* always zero? */
 	}
 
 	memset(tmp, 0, 30);
@@ -45,14 +47,14 @@ static int depack_GMC(FILE *in, FILE *out)
 	for (i = 0; i < 16; i++)
 		fwrite(tmp, 30, 1, out);
 
-	fseek(in, 0xf3, 0);
-	write8(out, PatPos = read8(in));	/* pattern list size */
+	hio_seek(in, 0xf3, 0);
+	write8(out, pat_pos = hio_read8(in));	/* pattern list size */
 	write8(out, 0x7f);			/* ntk byte */
 
 	/* read and write size of pattern list */
 	/*printf ( "Creating the pattern table ... " ); */
 	for (i = 0; i < 100; i++)
-		ptable[i] = read16b(in) / 1024;
+		ptable[i] = hio_read16b(in) / 1024;
 	fwrite(ptable, 128, 1, out);
 
 	/* get number of pattern */
@@ -65,10 +67,10 @@ static int depack_GMC(FILE *in, FILE *out)
 	write32b(out, PW_MOD_MAGIC);
 
 	/* pattern data */
-	fseek(in, 444, SEEK_SET);
+	hio_seek(in, 444, SEEK_SET);
 	for (i = 0; i <= max; i++) {
 		memset(tmp, 0, 1024);
-		fread(tmp, 1024, 1, in);
+		hio_read(tmp, 1024, 1, in);
 		for (j = 0; j < 256; j++) {
 			switch (tmp[(j * 4) + 2] & 0x0f) {
 			case 3:	/* replace by C */
@@ -104,84 +106,88 @@ static int depack_GMC(FILE *in, FILE *out)
 
 static int test_GMC(uint8 *data, char *t, int s)
 {
-	int j, k, l, m, n, o;
-	int start = 0;
+	int i, j, k;
+	int ssize, numpat;
 
 	PW_REQUEST_DATA(s, 1024);
 
 #if 0
 	/* test #1 */
 	if (i < 7) {
-/*printf ( "#1\n" );*/
 		return -1;
 	}
 	start = i - 7;
 #endif
 
 	/* samples descriptions */
-	m = 0;
-	j = 0;
-	for (k = 0; k < 15; k++) {
-		o = (data[start + 16 * k + 4] << 8) + data[start + 16 * k + 5];
-		n = (data[start + 16 * k + 12] << 8) +
-		    data[start + 16 * k + 13];
-		o *= 2;
+	ssize = 0;
+	for (i = 0; i < 15; i++) {
+		int len, lsize;
+		uint8 *d = data + 16 * i;
 
 		/* volumes */
-		if (data[start + 7 + (16 * k)] > 0x40)
+		if (d[7] > 0x40)
 			return -1;
+
+		len = readmem16b(d + 4) << 1;
+		lsize = readmem16b(d + 12);
 
 		/* size */
-		if (o > 0xFFFF)
+		if (len > 0xffff)
 			return -1;
 
-		if (n > o)
+		if (lsize > len)
 			return -1;
 
-		m += o;
-		if (o != 0)
-			j = k + 1;
+		ssize += len;
 	}
-	if (m <= 4)
+	if (ssize <= 4)
 		return -1;
-	/* j is the highest not null sample */
 
 	/* pattern table size */
-	if (data[start + 243] > 0x64 || data[start + 243] == 0x00)
+	if (data[243] > 0x64 || data[243] == 0)
 		return -1;
 
 	/* pattern order table */
-	l = 0;
-	for (n = 0; n < 100; n++) {
-		k = readmem16b(data + start + 244 + n * 2);
+	numpat = 0;
+	for (i = 0; i < 100; i++) {
+		k = readmem16b(data + 244 + i * 2);
 		if (k & 0x03ff)
 			return -1;
-		l = ((k >> 10) > l) ? k >> 10 : l;
+		if ((k >> 10) > numpat)
+			numpat = k >> 10;
 	}
-	l++;
+	numpat++;
 
-	/* l is the number of pattern */
-	if (l == 1 || l > 0x64)
+	if (numpat == 1 || numpat > 100)
 		return -1;
 
-	PW_REQUEST_DATA(s, 444 + k * 1024 + n * 4 + 3);
+	PW_REQUEST_DATA(s, 444 + k * 1024 + i * 4 + 3);
 
 	/* test pattern data */
-	o = data[start + 243];
-	for (k = 0; k < l; k++) {
-		for (n = 0; n < 256; n++) {
-			int offset = start + 444 + k * 1024 + n * 4;
-			uint8 *d = &data[offset];
+	for (i = 0; i < numpat; i++) {
+		for (j = 0; j < 256; j++) {
+			int offset = 444 + i * 1024 + j * 4;
+			uint8 *d;
+
+			PW_REQUEST_DATA(s, offset + 4);
+
+			d = &data[offset];
 
 			if (offset > (PW_TEST_CHUNK - 4))
 				return -1;
 				
+#if 0
 			/* First test fails with Jumping Jackson */
+			/* Second test never succeeds! */
 			if (/*d[0] > 0x03 ||*/ (d[2] & 0x0f) >= 0x90)
 				return -1;
+#endif
+
 #if 0
 			/* Test fails with Jumping Jackson */
-			if (((d[2] & 0xf0) >> 4) > j)
+			/* x is the highest jot jull sample */
+			if (((d[2] & 0xf0) >> 4) > x)
 				return -1;
 #endif
 			if ((d[2] & 0x0f) == 3 && d[3] > 0x40)
@@ -190,7 +196,7 @@ static int test_GMC(uint8 *data, char *t, int s)
 			if ((d[2] & 0x0f) == 4 && d[3] > 0x63)
 				return -1;
 
-			if ((d[2] & 0x0f) == 5 && d[3] > (o + 1))
+			if ((d[2] & 0x0f) == 5 && d[3] > (data[243] + 1))
 				return -1;
 
 			if ((d[2] & 0x0f) == 6 && d[3] >= 0x02)

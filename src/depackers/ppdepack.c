@@ -23,10 +23,10 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
 #include "common.h"
+#include "depacker.h"
 
-#define val(p) ((p)[0]<<16 | (p)[1] << 8 | (p)[2])
+/* #define val(p) ((p)[0]<<16 | (p)[1] << 8 | (p)[2]) */
 
 
 static int savefile(FILE *fo, void *mem, size_t length)
@@ -145,7 +145,7 @@ static int ppdepack(uint8 *data, size_t len, FILE *fo)
     return -1;
   }
 
-  outlen = (data[len-4]<<16) | (data[len-3]<<8) | data[len-2];
+  outlen = readmem24b(data + len - 4);
 
   /* fprintf(stderr, "decrunched length = %u bytes\n", outlen); */
 
@@ -170,7 +170,12 @@ static int ppdepack(uint8 *data, size_t len, FILE *fo)
   return success;
 }
 
-int decrunch_pp(FILE *f, FILE *fo)
+static int test_pp(unsigned char *b)
+{
+	return memcmp(b, "PP20", 4) == 0;
+}
+
+static int decrunch_pp(FILE *f, FILE *fo)
 {
     uint8 *packed /*, *unpacked */;
     int plen, unplen;
@@ -179,7 +184,9 @@ int decrunch_pp(FILE *f, FILE *fo)
     if (fo == NULL)
         goto err;
 
-    fstat(fileno(f), &st);
+    if (fstat(fileno(f), &st) < 0)
+	goto err;
+
     plen = st.st_size;
     //counter = 0;
 
@@ -201,7 +208,9 @@ int decrunch_pp(FILE *f, FILE *fo)
 	 goto err;
     }
 
-    fread (packed, plen, 1, f);
+    if (fread(packed, 1, plen, f) != plen) {
+         goto err1;
+    }
 
     /* Hmmh... original pp20 only support efficiency from 9 9 9 9 up to 9 10 12 13, afaik
      * but the xfd detection code says this... *sigh*
@@ -219,12 +228,12 @@ int decrunch_pp(FILE *f, FILE *fo)
     }
 
 
-    if (((((val (packed +4) ) * 256 ) + packed[7] ) & 0xf0f0f0f0) != 0 ) {
+    if (((readmem24b(packed +4)  * 256  + packed[7]) & 0xf0f0f0f0) != 0 ) {
 	 /*fprintf(stderr, "invalid efficiency(?)\n");*/
          goto err1;
     }
 
-    unplen = val (packed + plen - 4);
+    unplen = readmem24b(packed + plen - 4);
     if (!unplen) {
 	 /*fprintf(stderr, "not a powerpacked file\n");*/
          goto err1;
@@ -244,3 +253,8 @@ err1:
 err:
     return -1;
 }
+
+struct depacker libxmp_depacker_pp = {
+	test_pp,
+	decrunch_pp
+};

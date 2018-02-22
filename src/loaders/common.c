@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -32,22 +32,35 @@
 #include "period.h"
 #include "loader.h"
 
-int instrument_init(struct xmp_module *mod)
+int libxmp_init_instrument(struct module_data *m)
 {
-	mod->xxi = calloc(sizeof (struct xmp_instrument), mod->ins);
-	if (mod->xxi == NULL)
-		return -1;
+	struct xmp_module *mod = &m->mod;
 
-	if (mod->smp) {
-		mod->xxs = calloc (sizeof (struct xmp_sample), mod->smp);
+	if (mod->ins > 0) {
+		mod->xxi = calloc(sizeof (struct xmp_instrument), mod->ins);
+		if (mod->xxi == NULL)
+			return -1;
+	}
+
+	if (mod->smp > 0) {
+		int i;
+
+		mod->xxs = calloc(sizeof (struct xmp_sample), mod->smp);
 		if (mod->xxs == NULL)
 			return -1;
+		m->xtra = calloc(sizeof (struct extra_sample_data), mod->smp);
+		if (m->xtra == NULL)
+			return -1;
+
+		for (i = 0; i < mod->smp; i++) {
+			m->xtra[i].c5spd = m->c4rate;
+		}
 	}
 
 	return 0;
 }
 
-int subinstrument_alloc(struct xmp_module *mod, int i, int num)
+int libxmp_alloc_subinstrument(struct xmp_module *mod, int i, int num)
 {
 	if (num == 0)
 		return 0;
@@ -59,7 +72,7 @@ int subinstrument_alloc(struct xmp_module *mod, int i, int num)
 	return 0;
 }
 
-int pattern_init(struct xmp_module *mod)
+int libxmp_init_pattern(struct xmp_module *mod)
 {
 	mod->xxt = calloc(sizeof (struct xmp_track *), mod->trk);
 	if (mod->xxt == NULL)
@@ -72,8 +85,12 @@ int pattern_init(struct xmp_module *mod)
 	return 0;
 }
 
-int pattern_alloc(struct xmp_module *mod, int num)
+int libxmp_alloc_pattern(struct xmp_module *mod, int num)
 {
+	/* Sanity check */
+	if (num < 0 || num >= mod->pat || mod->xxp[num] != NULL)
+		return -1;
+
 	mod->xxp[num] = calloc(1, sizeof (struct xmp_pattern) +
         				sizeof (int) * (mod->chn - 1));
 	if (mod->xxp[num] == NULL)
@@ -82,10 +99,14 @@ int pattern_alloc(struct xmp_module *mod, int num)
 	return 0;
 }
 
-int track_alloc(struct xmp_module *mod, int num, int rows)
+int libxmp_alloc_track(struct xmp_module *mod, int num, int rows)
 {
-	mod->xxt[num] = calloc (sizeof (struct xmp_track) +
-				sizeof (struct xmp_event) * (rows - 1), 1);
+	/* Sanity check */
+	if (num < 0 || num >= mod->trk || mod->xxt[num] != NULL || rows <= 0)
+		return -1;
+
+	mod->xxt[num] = calloc(sizeof (struct xmp_track) +
+			       sizeof (struct xmp_event) * (rows - 1), 1);
 	if (mod->xxt[num] == NULL)
 		return -1;
 
@@ -94,15 +115,16 @@ int track_alloc(struct xmp_module *mod, int num, int rows)
 	return 0;
 }
 
-int tracks_in_pattern_alloc(struct xmp_module *mod, int num)
+int libxmp_alloc_tracks_in_pattern(struct xmp_module *mod, int num)
 {
 	int i;
 
+	D_(D_INFO "Alloc %d tracks of %d rows", mod->chn, mod->xxp[num]->rows);
 	for (i = 0; i < mod->chn; i++) {
 		int t = num * mod->chn + i;
 		int rows = mod->xxp[num]->rows;
 
-		if (track_alloc(mod, t, rows) < 0)
+		if (libxmp_alloc_track(mod, t, rows) < 0)
 			return -1;
 
 		mod->xxp[num]->index[i] = t;
@@ -111,20 +133,25 @@ int tracks_in_pattern_alloc(struct xmp_module *mod, int num)
 	return 0;
 }
 
-int pattern_tracks_alloc(struct xmp_module *mod, int num, int rows)
+int libxmp_alloc_pattern_tracks(struct xmp_module *mod, int num, int rows)
 {
-	if (pattern_alloc(mod, num) < 0)
+	/* Sanity check */
+	if (rows < 0 || rows > 256)
 		return -1;
+
+	if (libxmp_alloc_pattern(mod, num) < 0)
+		return -1;
+
 	mod->xxp[num]->rows = rows;
 
-	if (tracks_in_pattern_alloc(mod, num) < 0)
+	if (libxmp_alloc_tracks_in_pattern(mod, num) < 0)
 		return -1;
 
 	return 0;
 }
 
 /* Sample number adjustment by Vitamin/CAIG */
-struct xmp_sample *realloc_samples(struct xmp_sample *buf, int *size, int new_size)
+struct xmp_sample *libxmp_realloc_samples(struct xmp_sample *buf, int *size, int new_size)
 {
 	buf = realloc(buf, sizeof (struct xmp_sample) * new_size);
 	if (buf == NULL)
@@ -136,14 +163,14 @@ struct xmp_sample *realloc_samples(struct xmp_sample *buf, int *size, int new_si
 	return buf;
 }
 
-char *instrument_name(struct xmp_module *mod, int i, uint8 *r, int n)
+char *libxmp_instrument_name(struct xmp_module *mod, int i, uint8 *r, int n)
 {
 	CLAMP(n, 0, 31);
 
-	return copy_adjust(mod->xxi[i].name, r, n);
+	return libxmp_copy_adjust(mod->xxi[i].name, r, n);
 }
 
-char *copy_adjust(char *s, uint8 *r, int n)
+char *libxmp_copy_adjust(char *s, uint8 *r, int n)
 {
 	int i;
 
@@ -161,7 +188,7 @@ char *copy_adjust(char *s, uint8 *r, int n)
 	return s;
 }
 
-void read_title(HIO_HANDLE *f, char *t, int s)
+void libxmp_read_title(HIO_HANDLE *f, char *t, int s)
 {
 	uint8 buf[XMP_NAME_SIZE];
 
@@ -173,14 +200,14 @@ void read_title(HIO_HANDLE *f, char *t, int s)
 
 	memset(t, 0, s + 1);
 
-	hio_read(buf, 1, s, f);
+	hio_read(buf, 1, s, f);		/* coverity[check_return] */
 	buf[s] = 0;
-	copy_adjust(t, buf, s);
+	libxmp_copy_adjust(t, buf, s);
 }
 
 #ifndef LIBXMP_CORE_PLAYER
 
-int test_name(uint8 *s, int n)
+int libxmp_test_name(uint8 *s, int n)
 {
 	int i;
 
@@ -218,12 +245,12 @@ int test_name(uint8 *s, int n)
  * module players erroneously interpret as "newer-version-trackers commands".
  * Which they aren't.
  */
-void decode_noisetracker_event(struct xmp_event *event, uint8 *mod_event)
+void libxmp_decode_noisetracker_event(struct xmp_event *event, uint8 *mod_event)
 {
 	int fxt;
 
 	memset(event, 0, sizeof (struct xmp_event));
-	event->note = period_to_note((LSN(mod_event[0]) << 8) + mod_event[1]);
+	event->note = libxmp_period_to_note((LSN(mod_event[0]) << 8) + mod_event[1]);
 	event->ins = ((MSN(mod_event[0]) << 4) | MSN(mod_event[2]));
 	fxt = LSN(mod_event[2]);
 
@@ -232,16 +259,16 @@ void decode_noisetracker_event(struct xmp_event *event, uint8 *mod_event)
 		event->fxp = mod_event[3];
 	}
 
-	disable_continue_fx(event);
+	libxmp_disable_continue_fx(event);
 }
 #endif
 
-void decode_protracker_event(struct xmp_event *event, uint8 *mod_event)
+void libxmp_decode_protracker_event(struct xmp_event *event, uint8 *mod_event)
 {
 	int fxt = LSN(mod_event[2]);
 
 	memset(event, 0, sizeof (struct xmp_event));
-	event->note = period_to_note((LSN(mod_event[0]) << 8) + mod_event[1]);
+	event->note = libxmp_period_to_note((LSN(mod_event[0]) << 8) + mod_event[1]);
 	event->ins = ((MSN(mod_event[0]) << 4) | MSN(mod_event[2]));
 
 	if (fxt != 0x08) {
@@ -249,12 +276,12 @@ void decode_protracker_event(struct xmp_event *event, uint8 *mod_event)
 		event->fxp = mod_event[3];
 	}
 
-	disable_continue_fx(event);
+	libxmp_disable_continue_fx(event);
 }
 
-void disable_continue_fx(struct xmp_event *event)
+void libxmp_disable_continue_fx(struct xmp_event *event)
 {
-	if (!event->fxp) {
+	if (event->fxp == 0) {
 		switch (event->fxt) {
 		case 0x05:
 			event->fxt = 0x03;
@@ -267,6 +294,10 @@ void disable_continue_fx(struct xmp_event *event)
 		case 0x0a:
 			event->fxt = 0x00;
 		}
+	} else if (event->fxt == 0x0e) {
+		if (event->fxp == 0xa0 || event->fxp == 0xb0) {
+			event->fxt = event->fxp = 0;
+		}
 	}
 }
 
@@ -275,7 +306,7 @@ void disable_continue_fx(struct xmp_event *event)
 
 /* Given a directory, see if file exists there, ignoring case */
 
-int check_filename_case(char *dir, char *name, char *new_name, int size)
+int libxmp_check_filename_case(char *dir, char *name, char *new_name, int size)
 {
 	int found = 0;
 	DIR *dirfd;
@@ -304,14 +335,14 @@ int check_filename_case(char *dir, char *name, char *new_name, int size)
 
 /* FIXME: implement functionality for Win32 */
 
-int check_filename_case(char *dir, char *name, char *new_name, int size)
+int libxmp_check_filename_case(char *dir, char *name, char *new_name, int size)
 {
 	return 0;
 }
 
 #endif
 
-void get_instrument_path(struct module_data *m, char *path, int size)
+void libxmp_get_instrument_path(struct module_data *m, char *path, int size)
 {
 	if (m->instrument_path) {
 		strncpy(path, m->instrument_path, size);
@@ -323,7 +354,7 @@ void get_instrument_path(struct module_data *m, char *path, int size)
 }
 #endif /* LIBXMP_CORE_PLAYER */
 
-void set_type(struct module_data *m, char *fmt, ...)
+void libxmp_set_type(struct module_data *m, char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);

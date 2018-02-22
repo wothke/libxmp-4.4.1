@@ -1,5 +1,5 @@
-#ifndef __IFF_H
-#define __IFF_H
+#ifndef LIBXMP_IFF_H
+#define LIBXMP_IFF_H
 
 #include "list.h"
 #include "hio.h"
@@ -13,6 +13,8 @@
 #define IFF_SKIP_EMBEDDED	0x10
 #define IFF_CHUNK_TRUNC4	0x20
 
+#define IFF_MAX_CHUNK_SIZE	0x400000
+
 typedef void *iff_handle;
 
 struct iff_header {
@@ -22,19 +24,20 @@ struct iff_header {
 };
 
 struct iff_info {
-	char id[5];
+	char id[4];
 	int (*loader)(struct module_data *, int, HIO_HANDLE *, void *);
 	struct list_head list;
 };
 
-iff_handle iff_new(void);
-int iff_load(iff_handle, struct module_data *, HIO_HANDLE *, void *);
-/* int iff_chunk(iff_handle, struct module_data *, HIO_HANDLE *, void *); */
-int iff_register(iff_handle, char *,
+iff_handle libxmp_iff_new(void);
+int	libxmp_iff_load(iff_handle, struct module_data *, HIO_HANDLE *, void *);
+/* int libxmp_iff_chunk(iff_handle, struct module_data *, HIO_HANDLE *, void *); */
+int 	libxmp_iff_register(iff_handle, char *,
 	int (*loader)(struct module_data *, int, HIO_HANDLE *, void *));
-void iff_id_size(iff_handle, int);
-void iff_set_quirk(iff_handle, int);
-void iff_release(iff_handle);
-int iff_process(iff_handle, struct module_data *, char *, long, HIO_HANDLE *, void *);
+void 	libxmp_iff_id_size(iff_handle, int);
+void 	libxmp_iff_set_quirk(iff_handle, int);
+void 	libxmp_iff_release(iff_handle);
+/* int 	libxmp_iff_process(iff_handle, struct module_data *, char *, long,
+	HIO_HANDLE *, void *); */
 
-#endif /* __IFF_H */
+#endif /* LIBXMP_IFF_H */

@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 #include <stdio.h>
@@ -17,7 +31,7 @@
 static int emod_test(HIO_HANDLE *, char *, const int);
 static int emod_load(struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader emod_loader = {
+const struct format_loader libxmp_loader_emod = {
 	"Quadra Composer",
 	emod_test,
 	emod_load
@@ -36,9 +50,9 @@ static int emod_test(HIO_HANDLE * f, char *t, const int start)
 	if (hio_read32b(f) == MAGIC_EMIC) {
 		hio_read32b(f);	/* skip size */
 		hio_read16b(f);	/* skip version */
-		read_title(f, t, 20);
+		libxmp_read_title(f, t, 20);
 	} else {
-		read_title(f, t, 0);
+		libxmp_read_title(f, t, 0);
 	}
 
 	return 0;
@@ -57,12 +71,12 @@ static int get_emic(struct module_data *m, int size, HIO_HANDLE * f, void *parm)
 	mod->ins = hio_read8(f);
 	mod->smp = mod->ins;
 
-	m->quirk |= QUIRK_MODRNG;
+	m->period_type = PERIOD_MODRNG;
 
 	snprintf(mod->type, XMP_NAME_SIZE, "Quadra Composer EMOD v%d", ver);
 	MODULE_INFO();
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	for (i = 0; i < mod->ins; i++) {
@@ -70,7 +84,7 @@ static int get_emic(struct module_data *m, int size, HIO_HANDLE * f, void *parm)
 		struct xmp_sample *xxs = &mod->xxs[i];
 		struct xmp_subinstrument *sub;
 
-		if (subinstrument_alloc(mod, i, 1) < 0)
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 			return -1;
 
 		sub = &xxi->sub[0];
@@ -80,7 +94,7 @@ static int get_emic(struct module_data *m, int size, HIO_HANDLE * f, void *parm)
 		xxs->len = 2 * hio_read16b(f);
 		hio_read(xxi->name, 1, 20, f);
 		xxs->flg = hio_read8(f) & 1 ? XMP_SAMPLE_LOOP : 0;
-		sub->fin = hio_read8(f);
+		sub->fin = hio_read8s(f) << 4;
 		xxs->lps = 2 * hio_read16b(f);
 		xxs->lpe = xxs->lps + 2 * hio_read16b(f);
 		hio_read32b(f);	/* ptr */
@@ -99,7 +113,7 @@ static int get_emic(struct module_data *m, int size, HIO_HANDLE * f, void *parm)
 	mod->pat = hio_read8(f);
 	mod->trk = mod->pat * mod->chn;
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	memset(reorder, 0, 256);
@@ -107,7 +121,7 @@ static int get_emic(struct module_data *m, int size, HIO_HANDLE * f, void *parm)
 	for (i = 0; i < mod->pat; i++) {
 		reorder[hio_read8(f)] = i;
 
-		if (pattern_tracks_alloc(mod, i, hio_read8(f) + 1) < 0)
+		if (libxmp_alloc_pattern_tracks(mod, i, hio_read8(f) + 1) < 0)
 			return -1;
 
 		hio_seek(f, 20, SEEK_CUR);	/* skip name */
@@ -174,7 +188,7 @@ static int get_8smp(struct module_data *m, int size, HIO_HANDLE * f, void *parm)
 	D_(D_INFO "Stored samples : %d ", mod->smp);
 
 	for (i = 0; i < mod->smp; i++) {
-		if (load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
+		if (libxmp_load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
 			return -1;
 	}
 
@@ -192,25 +206,25 @@ static int emod_load(struct module_data *m, HIO_HANDLE * f, const int start)
 	hio_read32b(f);
 	hio_read32b(f);		/* EMOD */
 
-	handle = iff_new();
+	handle = libxmp_iff_new();
 	if (handle == NULL)
 		return -1;
 
 	/* IFF chunk IDs */
-	ret = iff_register(handle, "EMIC", get_emic);
-	ret |= iff_register(handle, "PATT", get_patt);
-	ret |= iff_register(handle, "8SMP", get_8smp);
+	ret = libxmp_iff_register(handle, "EMIC", get_emic);
+	ret |= libxmp_iff_register(handle, "PATT", get_patt);
+	ret |= libxmp_iff_register(handle, "8SMP", get_8smp);
 
 	if (ret != 0)
 		return -1;
 
 	/* Load IFF chunks */
-	if (iff_load(handle, m, f, NULL) < 0) {
-		iff_release(handle);
+	if (libxmp_iff_load(handle, m, f, NULL) < 0) {
+		libxmp_iff_release(handle);
 		return -1;
 	}
 
-	iff_release(handle);
+	libxmp_iff_release(handle);
 
 	return 0;
 }

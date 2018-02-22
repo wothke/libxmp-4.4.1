@@ -1,5 +1,5 @@
-/* Extended Module Player core player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -54,17 +54,21 @@ static int scan_module(struct context_data *ctx, int ep, int chain)
     struct module_data *m = &ctx->m;
     struct xmp_module *mod = &m->mod;
     int parm, gvol_memory, f1, f2, p1, p2, ord, ord2;
-    int row, last_row, break_row, cnt_row;
+    int row, last_row, break_row, row_count;
     int gvl, bpm, speed, base_time, chn;
-    int alltmp;
-    double clock, clock_rst;
-    int loop_chn, loop_flg;
-    int pdelay = 0, skip_fetch;
-    int loop_stk[XMP_MAX_CHANNELS];
+    int frame_count;
+    double time, start_time;
+    int loop_chn, loop_num, inside_loop;
+    int pdelay = 0;
+    int loop_count[XMP_MAX_CHANNELS];
     int loop_row[XMP_MAX_CHANNELS];
     struct xmp_event* event;
     int i, pat;
+    int has_marker;
     struct ord_data *info;
+#ifndef LIBXMP_CORE_PLAYER
+    int st26_speed;
+#endif
 
     if (mod->len == 0)
 	return 0;
@@ -75,15 +79,23 @@ static int scan_module(struct context_data *ctx, int ep, int chain)
 			mod->xxp[pat]->rows ? mod->xxp[pat]->rows : 1);
     }
 
-    memset(loop_stk, 0, sizeof(int) * mod->chn);
-    memset(loop_row, 0, sizeof(int) * mod->chn);
-    loop_chn = loop_flg = 0;
+    for (i = 0; i < mod->chn; i++) {
+	loop_count[i] = 0;
+	loop_row[i] = -1;
+    }
+    loop_num = 0;
+    loop_chn = -1;
 
     gvl = mod->gvl;
     bpm = mod->bpm;
 
     speed = mod->spd;
     base_time = m->rrate;
+#ifndef LIBXMP_CORE_PLAYER
+    st26_speed = 0;
+#endif
+
+    has_marker = HAS_QUIRK(QUIRK_MARKER);
 
     /* By erlk ozlr <erlk.ozlr@gmail.com>
      *
@@ -104,16 +116,16 @@ static int scan_module(struct context_data *ctx, int ep, int chain)
     ord2 = -1;
     ord = ep - 1;
 
-    gvol_memory = break_row = cnt_row = alltmp = 0;
-    clock_rst = clock = 0.0;
-    skip_fetch = 0;
+    gvol_memory = break_row = row_count = frame_count = 0;
+    start_time = time = 0.0;
+    inside_loop = 0;
 
     while (42) {
 	if ((uint32)++ord >= mod->len) {
 	    if (mod->rst > mod->len || mod->xxo[mod->rst] >= mod->pat) {
-		ord = m->seq_data[chain].entry_point;
+		ord = ep;
 	    } else {
-		if (get_sequence(ctx, mod->rst) == chain) {
+		if (libxmp_get_sequence(ctx, mod->rst) == chain) {
 	            ord = mod->rst;
 		} else {
 		    ord = ep;
@@ -121,7 +133,7 @@ static int scan_module(struct context_data *ctx, int ep, int chain)
 	    }
 	   
 	    pat = mod->xxo[ord];
-	    if (pat == S3M_END) {
+	    if (has_marker && pat == S3M_END) {
 		break;
 	    }
 	} 
@@ -137,32 +149,46 @@ static int scan_module(struct context_data *ctx, int ep, int chain)
 
 	/* All invalid patterns skipped, only S3M_END aborts replay */
 	if (pat >= mod->pat) {
-	    if (pat == S3M_END) {
+	    if (has_marker && pat == S3M_END) {
 		ord = mod->len;
 	        continue;
 	    }
 	    continue;
 	}
 
-	if (break_row < mod->xxp[pat]->rows && m->scan_cnt[ord][break_row]) {
-	    break;
-	}
+        if (break_row >= mod->xxp[pat]->rows) {
+            break_row = 0;
+        }
 
-	info->gvl = gvl;
-	info->bpm = bpm;
-	info->speed = speed;
-	info->time = clock + m->time_factor * alltmp / bpm;
+        /* Loops can cross pattern boundaries, so check if we're not looping */
+        if (m->scan_cnt[ord][break_row] && !inside_loop) {
+            break;
+        }
+
+        /* Don't update pattern information if we're inside a loop, otherwise
+         * a loop containing e.g. a global volume fade can make the pattern
+         * start with the wrong volume.
+         */
+        if (!inside_loop && info->gvl < 0) {
+            info->gvl = gvl;
+            info->bpm = bpm;
+            info->speed = speed;
+            info->time = time + m->time_factor * frame_count * base_time / bpm;
+#ifndef LIBXMP_CORE_PLAYER
+            info->st26_speed = st26_speed;
+#endif
+        }
 
 	if (info->start_row == 0 && ord != 0) {
 	    if (ord == ep) {
-		clock_rst = clock + m->time_factor * alltmp / bpm;
+		start_time = time + m->time_factor * frame_count * base_time / bpm;
 	    }
 
 	    info->start_row = break_row;
 	}
 
 	last_row = mod->xxp[pat]->rows;
-	for (row = break_row, break_row = 0; row < last_row; row++, cnt_row++) {
+	for (row = break_row, break_row = 0; row < last_row; row++, row_count++) {
 	    /* Prevent crashes caused by large softmixer frames */
 	    if (bpm < XMP_MIN_BPM) {
 	        bpm = XMP_MIN_BPM;
@@ -181,11 +207,11 @@ static int scan_module(struct context_data *ctx, int ep, int chain)
 	     * (...) it dies at the end of position 2F
 	     */
 
-	    if (cnt_row > 512)	/* was 255, but Global trash goes to 318 */
+	    if (row_count > 512)  /* was 255, but Global trash goes to 318 */
 		goto end_module;
 
-	    if (!loop_flg && m->scan_cnt[ord][row]) {
-		cnt_row--;
+	    if (!loop_num && m->scan_cnt[ord][row]) {
+		row_count--;
 		goto end_module;
 	    }
 	    m->scan_cnt[ord][row]++;
@@ -198,17 +224,10 @@ static int scan_module(struct context_data *ctx, int ep, int chain)
 
 		event = &EVENT(mod->xxo[ord], chn, row);
 
-		/* Pattern delay + pattern break cause target row events
-		 * to be ignored
-		 */
-		if (skip_fetch) {
-		    f1 = p1 = f2 = p2 = 0;
-		} else {
-		    f1 = event->fxt;
-		    p1 = event->fxp;
-		    f2 = event->f2t;
-		    p2 = event->f2p;
-		}
+		f1 = event->fxt;
+		p1 = event->fxp;
+		f2 = event->f2t;
+		p2 = event->f2p;
 
 		if (f1 == FX_GLOBALVOL || f2 == FX_GLOBALVOL) {
 		    gvl = (f1 == FX_GLOBALVOL) ? p1 : p2;
@@ -253,14 +272,19 @@ static int scan_module(struct context_data *ctx, int ep, int chain)
 
 		if ((f1 == FX_SPEED && p1) || (f2 == FX_SPEED && p2)) {
 		    parm = (f1 == FX_SPEED) ? p1 : p2;
-		    alltmp += cnt_row * speed * base_time;
-		    cnt_row = 0;
+		    frame_count += row_count * speed;
+		    row_count = 0;
 		    if (parm) {
-			if (p->flags & XMP_FLAGS_VBLANK || parm < 0x20) {
-			    speed = parm;
+			if (HAS_QUIRK(QUIRK_NOBPM) || p->flags & XMP_FLAGS_VBLANK || parm < 0x20) {
+			    if (parm > 0) {
+			        speed = parm;
+#ifndef LIBXMP_CORE_PLAYER
+			        st26_speed = 0;
+#endif
+                            }
 			} else {
-			    clock += m->time_factor * alltmp / bpm;
-			    alltmp = 0;
+			    time += m->time_factor * frame_count * base_time / bpm;
+			    frame_count = 0;
 			    bpm = parm;
 			}
 		    }
@@ -273,22 +297,37 @@ static int scan_module(struct context_data *ctx, int ep, int chain)
 		if (f2 == FX_SPEED_CP) {
 		    f2 = FX_S3M_SPEED;
 		}
+
+		/* ST2.6 speed processing */
+
+		if (f1 == FX_ICE_SPEED && p1) {
+		    if (LSN(p1)) {
+		        st26_speed = (MSN(p1) << 8) | LSN(p1);
+		    } else {
+			st26_speed = MSN(p1);
+		    }
+		}
 #endif
 
 		if ((f1 == FX_S3M_SPEED && p1) || (f2 == FX_S3M_SPEED && p2)) {
 		    parm = (f1 == FX_S3M_SPEED) ? p1 : p2;
-		    alltmp += cnt_row * speed * base_time;
-		    cnt_row  = 0;
-		    speed = parm;
+		    if (parm > 0) {
+		        frame_count += row_count * speed;
+		        row_count  = 0;
+		        speed = parm;
+#ifndef LIBXMP_CORE_PLAYER
+		        st26_speed = 0;
+#endif
+		    }
 		}
 
 		if ((f1 == FX_S3M_BPM && p1) || (f2 == FX_S3M_BPM && p2)) {
 		    parm = (f1 == FX_S3M_BPM) ? p1 : p2;
 		    if (parm >= 0x20) {
-			alltmp += cnt_row * speed * base_time;
-			cnt_row = 0;
-			clock += m->time_factor * alltmp / bpm;
-			alltmp = 0;
+			frame_count += row_count * speed;
+			row_count = 0;
+			time += m->time_factor * frame_count * base_time / bpm;
+			frame_count = 0;
 			bpm = parm;
 		    }
 		}
@@ -296,44 +335,58 @@ static int scan_module(struct context_data *ctx, int ep, int chain)
 #ifndef LIBXMP_CORE_DISABLE_IT
 		if ((f1 == FX_IT_BPM && p1) || (f2 == FX_IT_BPM && p2)) {
 		    parm = (f1 == FX_IT_BPM) ? p1 : p2;
-		    alltmp += cnt_row * speed * base_time;
-		    cnt_row = 0;
-		    clock += m->time_factor * alltmp / bpm;
-		    alltmp = 0;
+		    frame_count += row_count * speed;
+		    row_count = 0;
+		    time += m->time_factor * frame_count * base_time / bpm;
+		    frame_count = 0;
 
 		    if (MSN(parm) == 0) {
-		        clock += m->time_factor * base_time / bpm;
+		        time += m->time_factor * base_time / bpm;
 			for (i = 1; i < speed; i++) {
 			    bpm -= LSN(parm);
 			    if (bpm < 0x20)
 				bpm = 0x20;
-		            clock += m->time_factor * base_time / bpm;
+		            time += m->time_factor * base_time / bpm;
 			}
 
-			// remove one row at final bpm
-			clock -= m->time_factor * speed * base_time / bpm;
+			/* remove one row at final bpm */
+			time -= m->time_factor * speed * base_time / bpm;
 
 		    } else if (MSN(parm) == 1) {
-		        clock += m->time_factor * base_time / bpm;
+		        time += m->time_factor * base_time / bpm;
 			for (i = 1; i < speed; i++) {
 			    bpm += LSN(parm);
 			    if (bpm > 0xff)
 				bpm = 0xff;
-		            clock += m->time_factor * base_time / bpm;
+		            time += m->time_factor * base_time / bpm;
 			}
 
-			// remove one row at final bpm
-			clock -= m->time_factor * speed * base_time / bpm;
+			/* remove one row at final bpm */
+			time -= m->time_factor * speed * base_time / bpm;
 
 		    } else {
 			bpm = parm;
 		    }
 		}
+
+		if (f1 == FX_IT_ROWDELAY) {
+	    		m->scan_cnt[ord][row] += p1 & 0x0f;
+			frame_count += (p1 & 0x0f) * speed;
+		}
+
+		if (f1 == FX_IT_BREAK) {
+		    break_row = p1;
+		    last_row = 0;
+		}
 #endif
 
 		if (f1 == FX_JUMP || f2 == FX_JUMP) {
 		    ord2 = (f1 == FX_JUMP) ? p1 : p2;
+		    break_row = 0;
 		    last_row = 0;
+
+		    /* prevent infinite loop, see OpenMPT PatLoop-Various.xm */
+		    inside_loop = 0;
 		}
 
 		if (f1 == FX_BREAK || f2 == FX_BREAK) {
@@ -346,43 +399,63 @@ static int scan_module(struct context_data *ctx, int ep, int chain)
 		    parm = (f1 == FX_EXTENDED) ? p1 : p2;
 
 		    if ((parm >> 4) == EX_PATT_DELAY) {
-			pdelay = parm & 0x0f;
-			alltmp += pdelay * speed * base_time;
+			if (m->read_event_type != READ_EVENT_ST3 || !pdelay) {
+			    pdelay = parm & 0x0f;
+			    frame_count += pdelay * speed;
+                        }
 		    }
 
 		    if ((parm >> 4) == EX_PATTERN_LOOP) {
 			if (parm &= 0x0f) {
-			    if (loop_stk[chn]) {
-				if (--loop_stk[chn])
-				    loop_chn = chn + 1;
-				else {
-				    loop_flg--;
+			    /* Loop end */
+			    if (loop_count[chn]) {
+				if (--loop_count[chn]) {
+				    /* next iteraction */
+				    loop_chn = chn;
+				} else {
+				    /* finish looping */
+				    loop_num--;
+				    inside_loop = 0;
 				    if (m->quirk & QUIRK_S3MLOOP)
-					loop_row[chn] = row + 1;
+					loop_row[chn] = row;
 				}
 			    } else {
-				if (loop_row[chn] <= row) {
-				    loop_stk[chn] = parm;
-				    loop_chn = chn + 1;
-				    loop_flg++;
-				}
+				loop_count[chn] = parm;
+				loop_chn = chn;
+				loop_num++;
 			    }
 			} else { 
-			    loop_row[chn] = row;
+			    /* Loop start */
+			    loop_row[chn] = row - 1;
+			    inside_loop = 1;
+			    if (HAS_QUIRK(QUIRK_FT2BUGS))
+				break_row = row;
 			}
 		    }
 		}
 	    }
-	    skip_fetch = 0;
 
-	    if (loop_chn) {
-		row = loop_row[--loop_chn] - 1;
-		loop_chn = 0;
+	    if (loop_chn >= 0) {
+		row = loop_row[loop_chn];
+		loop_chn = -1;
 	    }
+
+#ifndef LIBXMP_CORE_PLAYER
+	    if (st26_speed) {
+	        frame_count += row_count * speed;
+	        row_count  = 0;
+		if (st26_speed & 0x10000) {
+			speed = (st26_speed & 0xff00) >> 8;
+		} else {
+			speed = st26_speed & 0xff;
+		}
+		st26_speed ^= 0x10000;
+	    }
+#endif
 	}
 
 	if (break_row && pdelay) {
-	    skip_fetch = 1;
+	    break_row++;
 	}
 
 	if (ord2 >= 0) {
@@ -390,29 +463,38 @@ static int scan_module(struct context_data *ctx, int ep, int chain)
 	    ord2 = -1;
 	}
 
-	alltmp += cnt_row * speed * base_time;
-	cnt_row = 0;
+	frame_count += row_count * speed;
+	row_count = 0;
     }
     row = break_row;
 
 end_module:
+
+    /* Sanity check */
+    {
+        pat = mod->xxo[ord];
+        if (pat >= mod->pat || row >= mod->xxp[pat]->rows) {
+            row = 0;
+        }
+    }
+
     p->scan[chain].num = m->scan_cnt[ord][row];
     p->scan[chain].row = row;
     p->scan[chain].ord = ord;
 
-    clock -= clock_rst;
-    alltmp += cnt_row * speed * base_time;
+    time -= start_time;
+    frame_count += row_count * speed;
 
-    return (clock + m->time_factor * alltmp / bpm);
+    return (time + m->time_factor * frame_count * base_time / bpm);
 }
 
-int get_sequence(struct context_data *ctx, int ord)
+int libxmp_get_sequence(struct context_data *ctx, int ord)
 {
 	struct player_data *p = &ctx->p;
 	return p->sequence_control[ord];
 }
 
-int scan_sequences(struct context_data *ctx)
+int libxmp_scan_sequences(struct context_data *ctx)
 {
 	struct player_data *p = &ctx->p;
 	struct module_data *m = &ctx->m;
@@ -420,6 +502,13 @@ int scan_sequences(struct context_data *ctx)
 	int i, ep;
 	int seq;
 	unsigned char temp_ep[XMP_MAX_MOD_LENGTH];
+
+	/* Initialize order data to prevent overwrite when a position is used
+	 * multiple times at different starting points (see janosik.xm).
+	 */
+	for (i = 0; i < XMP_MAX_MOD_LENGTH; i++) {
+		m->xxo_info[i].gvl = -1;
+	}
 
 	ep = 0;
 	memset(p->sequence_control, 0xff, XMP_MAX_MOD_LENGTH);

@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 /* Loader for Imago Orpheus modules based on the format description
@@ -91,7 +105,7 @@ struct imf_sample {
 static int imf_test (HIO_HANDLE *, char *, const int);
 static int imf_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader imf_loader = {
+const struct format_loader libxmp_loader_imf = {
     "Imago Orpheus v1.0",
     imf_test,
     imf_load
@@ -104,7 +118,7 @@ static int imf_test(HIO_HANDLE *f, char *t, const int start)
 	return -1;
 
     hio_seek(f, start, SEEK_SET);
-    read_title(f, t, 32);
+    libxmp_read_title(f, t, 32);
 
     return 0;
 }
@@ -241,6 +255,11 @@ static int imf_load(struct module_data *m, HIO_HANDLE *f, const int start)
     hio_read(&ih.unused2, 8, 1, f);
     ih.magic = hio_read32b(f);
 
+    /* Sanity check */
+    if (ih.len > 256 || ih.pat > 256 || ih.ins > 255) {
+	return -1;
+    }
+
     for (i = 0; i < 32; i++) {
 	hio_read(&ih.chn[i].name, 12, 1, f);
 	ih.chn[i].status = hio_read8(f);
@@ -251,12 +270,11 @@ static int imf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
     hio_read(&ih.pos, 256, 1, f);
 
-#if 0
-    if (ih.magic != MAGIC_IM10)
+    if (ih.magic != MAGIC_IM10) {
 	return -1;
-#endif
+    }
 
-    copy_adjust(mod->name, (uint8 *)ih.name, 32);
+    libxmp_copy_adjust(mod->name, (uint8 *)ih.name, 32);
 
     mod->len = ih.len;
     mod->ins = ih.ins;
@@ -264,20 +282,21 @@ static int imf_load(struct module_data *m, HIO_HANDLE *f, const int start)
     mod->pat = ih.pat;
 
     if (ih.flg & 0x01)
-	m->quirk |= QUIRK_LINEAR;
+	m->period_type = PERIOD_LINEAR;
 
     mod->spd = ih.tpo;
     mod->bpm = ih.bpm;
 
-    set_type(m, "Imago Orpheus 1.0 IMF");
+    libxmp_set_type(m, "Imago Orpheus 1.0 IMF");
 
     MODULE_INFO();
 
-    for (mod->chn = i = 0; i < 32; i++) {
-	if (ih.chn[i].status != 0x00)
-	    mod->chn = i + 1;
-	else
+    mod->chn = 0;
+    for (i = 0; i < 32; i++) {
+	if (ih.chn[i].status == 0x00)
 	    continue;
+
+	mod->chn = i + 1;
 	mod->xxc[i].pan = ih.chn[i].pan;
 #if 0
 	/* FIXME */
@@ -286,16 +305,18 @@ static int imf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	mod->xxc[i].flg |= XMP_CHANNEL_FX;
 #endif
     }
+
     mod->trk = mod->pat * mod->chn;
  
     memcpy(mod->xxo, ih.pos, mod->len);
-    for (i = 0; i < mod->len; i++)
+    for (i = 0; i < mod->len; i++) {
 	if (mod->xxo[i] == 0xff)
 	    mod->xxo[i]--;
+    }
 
     m->c4rate = C4_NTSC_RATE;
 
-    if (pattern_init(mod) < 0)
+    if (libxmp_init_pattern(mod) < 0)
 	return -1;
 
     /* Read patterns */
@@ -303,9 +324,18 @@ static int imf_load(struct module_data *m, HIO_HANDLE *f, const int start)
     D_(D_INFO "Stored patterns: %d", mod->pat);
 
     for (i = 0; i < mod->pat; i++) {
+        int rows;
+
 	pat_len = hio_read16l(f) - 4;
 
-	if (pattern_tracks_alloc(mod, i, hio_read16l(f)) < 0)
+        rows = hio_read16l(f);
+
+	/* Sanity check */
+	if (rows > 256) {
+	    return -1;
+	}
+
+	if (libxmp_alloc_pattern_tracks(mod, i, rows) < 0)
 	    return -1;
 
 	r = 0;
@@ -318,8 +348,13 @@ static int imf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		continue;
 	    }
 
+	    /* Sanity check */
+	    if (r >= rows) {
+		return -1;
+	    }
+
 	    c = b & IMF_CH_MASK;
-	    event = c >= mod->chn ? &dummy : &EVENT (i, c, r);
+	    event = c >= mod->chn ? &dummy : &EVENT(i, c, r);
 
 	    if (b & IMF_NI_FOLLOW) {
 		n = hio_read8(f);
@@ -351,7 +386,7 @@ static int imf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	}
     }
 
-    if (instrument_init(mod) < 0)
+    if (libxmp_init_instrument(m) < 0)
 	return -1;
 
     /* Read and convert instruments and samples */
@@ -359,7 +394,10 @@ static int imf_load(struct module_data *m, HIO_HANDLE *f, const int start)
     D_(D_INFO "Instruments: %d", mod->ins);
 
     for (smp_num = i = 0; i < mod->ins; i++) {
+	struct xmp_instrument *xxi = &mod->xxi[i];
+
 	hio_read(&ii.name, 32, 1, f);
+	ii.name[31] = 0;
 	hio_read(&ii.map, 120, 1, f);
 	hio_read(&ii.unused, 8, 1, f);
 	for (j = 0; j < 32; j++)
@@ -380,40 +418,50 @@ static int imf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	ii.nsm = hio_read16l(f);
 	ii.magic = hio_read32b(f);
 
+	/* Sanity check */
+	if (ii.nsm > 255)
+	    return -1;
+
 	if (ii.magic != MAGIC_II10)
 	    return -2;
 
-	mod->xxi[i].nsm = ii.nsm;
+	xxi->nsm = ii.nsm;
 
-        if (mod->xxi[i].nsm) {
-	    if (subinstrument_alloc(mod, i, mod->xxi[i].nsm) < 0)
+        if (xxi->nsm > 0) {
+	    if (libxmp_alloc_subinstrument(mod, i, xxi->nsm) < 0)
 		return -1;
 	}
 
-	adjust_string ((char *) ii.name);
-	strncpy ((char *) mod->xxi[i].name, ii.name, 24);
+	strncpy((char *)xxi->name, ii.name, 24);
 
 	for (j = 0; j < 108; j++) {
-		mod->xxi[i].map[j + 12].ins = ii.map[j];
+		xxi->map[j + 12].ins = ii.map[j];
 	}
 
 	D_(D_INFO "[%2X] %-31.31s %2d %4x %c", i, ii.name, ii.nsm,
 		ii.fadeout, ii.env[0].flg & 0x01 ? 'V' : '-');
 
-	mod->xxi[i].aei.npt = ii.env[0].npt;
-	mod->xxi[i].aei.sus = ii.env[0].sus;
-	mod->xxi[i].aei.lps = ii.env[0].lps;
-	mod->xxi[i].aei.lpe = ii.env[0].lpe;
-	mod->xxi[i].aei.flg = ii.env[0].flg & 0x01 ? XMP_ENVELOPE_ON : 0;
-	mod->xxi[i].aei.flg |= ii.env[0].flg & 0x02 ? XMP_ENVELOPE_SUS : 0;
-	mod->xxi[i].aei.flg |= ii.env[0].flg & 0x04 ?  XMP_ENVELOPE_LOOP : 0;
+	xxi->aei.npt = ii.env[0].npt;
+	xxi->aei.sus = ii.env[0].sus;
+	xxi->aei.lps = ii.env[0].lps;
+	xxi->aei.lpe = ii.env[0].lpe;
+	xxi->aei.flg = ii.env[0].flg & 0x01 ? XMP_ENVELOPE_ON : 0;
+	xxi->aei.flg |= ii.env[0].flg & 0x02 ? XMP_ENVELOPE_SUS : 0;
+	xxi->aei.flg |= ii.env[0].flg & 0x04 ?  XMP_ENVELOPE_LOOP : 0;
 
-	for (j = 0; j < mod->xxi[i].aei.npt; j++) {
-	    mod->xxi[i].aei.data[j * 2] = ii.vol_env[j * 2];
-	    mod->xxi[i].aei.data[j * 2 + 1] = ii.vol_env[j * 2 + 1];
+	/* Sanity check */
+	if (xxi->aei.npt >= 16) {
+	    return -1;
+	}
+
+	for (j = 0; j < xxi->aei.npt; j++) {
+	    xxi->aei.data[j * 2] = ii.vol_env[j * 2];
+	    xxi->aei.data[j * 2 + 1] = ii.vol_env[j * 2 + 1];
 	}
 
 	for (j = 0; j < ii.nsm; j++, smp_num++) {
+            struct xmp_subinstrument *sub = &xxi->sub[j];
+            struct xmp_sample *xxs = &mod->xxs[smp_num];
 	    int sid;
 
 	    hio_read(&is.name, 13, 1, f);
@@ -431,39 +479,51 @@ static int imf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	    is.dram = hio_read32l(f);
 	    is.magic = hio_read32b(f);
 
-	    mod->xxi[i].sub[j].sid = smp_num;
-	    mod->xxi[i].sub[j].vol = is.vol;
-	    mod->xxi[i].sub[j].pan = is.pan;
-	    mod->xxs[smp_num].len = is.len;
-	    mod->xxs[smp_num].lps = is.lps;
-	    mod->xxs[smp_num].lpe = is.lpe;
-	    mod->xxs[smp_num].flg = is.flg & 1 ? XMP_SAMPLE_LOOP : 0;
+            /* Sanity check */
+            if (is.len > 0x100000 || is.lps > 0x100000 || is.lpe > 0x100000)
+		return -1;
+
+	    sub->sid = smp_num;
+	    sub->vol = is.vol;
+	    sub->pan = is.pan;
+	    xxs->len = is.len;
+	    xxs->lps = is.lps;
+	    xxs->lpe = is.lpe;
+	    xxs->flg = is.flg & 1 ? XMP_SAMPLE_LOOP : 0;
 
 	    if (is.flg & 4) {
-	        mod->xxs[smp_num].flg |= XMP_SAMPLE_16BIT;
-	        mod->xxs[smp_num].len >>= 1;
-	        mod->xxs[smp_num].lps >>= 1;
-	        mod->xxs[smp_num].lpe >>= 1;
+	        xxs->flg |= XMP_SAMPLE_16BIT;
+	        xxs->len >>= 1;
+	        xxs->lps >>= 1;
+	        xxs->lpe >>= 1;
 	    }
 
 	    D_(D_INFO "  %02x: %05x %05x %05x %5d",
 		    j, is.len, is.lps, is.lpe, is.rate);
 
-	    c2spd_to_note (is.rate, &mod->xxi[i].sub[j].xpo, &mod->xxi[i].sub[j].fin);
+	    libxmp_c2spd_to_note(is.rate, &sub->xpo, &sub->fin);
 
-	    if (!mod->xxs[smp_num].len)
+	    if (xxs->len <= 0)
 		continue;
 
-	    sid = mod->xxi[i].sub[j].sid;
-	    if (load_sample(m, f, 0, &mod->xxs[sid], NULL) < 0)
+	    sid = sub->sid;
+	    if (libxmp_load_sample(m, f, 0, &mod->xxs[sid], NULL) < 0)
 		return -1;
 	}
     }
 
     mod->smp = smp_num;
     mod->xxs = realloc(mod->xxs, sizeof (struct xmp_sample) * mod->smp);
+    if (mod->xxs == NULL) {
+        return -1;
+    }
+    m->xtra = realloc(m->xtra, sizeof (struct extra_sample_data) * mod->smp);
+    if (m->xtra == NULL) {
+        return -1;
+    }
 
-    m->quirk |= QUIRK_FILTER | QUIRKS_ST3;
+    m->c4rate = C4_NTSC_RATE;
+    m->quirk |= QUIRK_FILTER | QUIRKS_ST3 | QUIRK_ARPMEM;
     m->read_event_type = READ_EVENT_ST3;
 
     return 0;

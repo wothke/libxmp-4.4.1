@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "common.h"
+#include "depacker.h"
 
 struct io {
 	uint8 *src;
@@ -80,7 +81,7 @@ static int get_bits_final(struct io *io, int count)
 	return r;
 }
 
-static int copy_data(struct io *io, int d1, int *data)
+static int copy_data(struct io *io, int d1, int *data, uint8 *dest_start, uint8 *dest_end)
 {
 	uint8 *copy_src;
 	int dest_offset, count, copy_len;
@@ -126,7 +127,13 @@ static int copy_data(struct io *io, int d1, int *data)
 
 	copy_src = io->dest + dest_offset - get_bits(io, count) - 1;
 
+	/* Sanity check */
+	if (copy_src < dest_start || copy_src + copy_len >= dest_end) {
+		return -1;
+	}
+
 	do {
+		//printf("dest=%p src=%p end=%p\n", io->dest, copy_src, dest_end);
 		*io->dest++ = *copy_src++;
 	} while (copy_len--);
 
@@ -135,7 +142,7 @@ static int copy_data(struct io *io, int d1, int *data)
 	return d1;
 }
 
-static void unsqsh_block(struct io *io, uint8 *dest_end)
+static int unsqsh_block(struct io *io, uint8 *dest_start, uint8 *dest_end)
 {
 	int d1, d2, data, unpack_len, count, old_count;
 
@@ -148,7 +155,9 @@ static void unsqsh_block(struct io *io, uint8 *dest_end)
 	do {
 		if (d1 < 8) {
 			if (get_bits(io, 1)) {
-				d1 = copy_data(io, d1, &data);
+				d1 = copy_data(io, d1, &data, dest_start, dest_end);
+				if (d1 < 0)
+					return -1;
 				d2 -= d2 >> 3;
 				continue;
 			} 
@@ -171,7 +180,9 @@ static void unsqsh_block(struct io *io, uint8 *dest_end)
 				}
 			} else {
 				if (get_bits(io, 1) == 0) {
-					d1 = copy_data(io, d1, &data);
+					d1 = copy_data(io, d1, &data, dest_start, dest_end);
+					if (d1 < 0)
+						return -1;
 	      				d2 -= d2 >> 3;
 					continue;
 				}
@@ -216,24 +227,34 @@ static void unsqsh_block(struct io *io, uint8 *dest_end)
 		d2 -= d2 >> 3;
 
 	} while (io->dest < dest_end);
+
+	return 0;
 }
 
-static int unsqsh(uint8 *src, uint8 *dest, int len)
+static int unsqsh(uint8 *src, int srclen, uint8 *dest, int destlen)
 {
+	int len = destlen;
 	int decrunched = 0;
 	int type;
 	int sum, packed_size, unpacked_size;
 	int lchk;
-	uint8 *c, *dest_end;
+	uint8 *c, *dest_start, *dest_end;
 	uint8 bc[3];
 	struct io io;
 
 	io.src = src;
 	io.dest = dest;
 
+	dest_start = io.dest;
+
 	c = src + 20;
 
 	while (len) {
+		/* Sanity check */
+		if (c >= src + srclen) {
+			return -1;
+		}
+
 		type = *c++;
 		c++;			/* hchk */
 
@@ -245,6 +266,15 @@ static int unsqsh(uint8 *src, uint8 *dest, int len)
 
 		unpacked_size = readmem16b(c);	/* unpacked */
 		c += 2;
+
+		/* Sanity check */
+		if (packed_size <= 0 || unpacked_size <= 0) {
+			return -1;
+		}
+
+		if (c + packed_size + 3 > src + srclen) {
+			return -1;
+		}
 
 		io.src = c + 2;
 		memcpy(bc, c + packed_size, 3);
@@ -272,13 +302,20 @@ static int unsqsh(uint8 *src, uint8 *dest, int len)
 		}
 
 		len -= unpacked_size;
-		decrunched += unpacked_size;;
+		decrunched += unpacked_size;
+
+		/* Sanity check */
+		if (decrunched > destlen) {
+			return -1;
+		}
 
 		packed_size = (packed_size + 3) & 0xfffc;
 		c += packed_size;
 		dest_end = io.dest + unpacked_size;
 
-		unsqsh_block(&io, dest_end);
+		if (unsqsh_block(&io, dest_start, dest_end) < 0) {
+			return -1;
+		}
 		
 		io.dest = dest_end;
 	}
@@ -287,20 +324,31 @@ static int unsqsh(uint8 *src, uint8 *dest, int len)
 
 }
 
-int decrunch_sqsh(FILE * f, FILE * fo)
+static int test_sqsh(unsigned char *b)
+{
+	return memcmp(b, "XPKF", 4) == 0 && memcmp(b + 8, "SQSH", 4) == 0;
+}
+
+static int decrunch_sqsh(FILE * f, FILE * fo)
 {
 	unsigned char *src, *dest;
 	int srclen, destlen;
 
-	if (read32b(f) != 0x58504b46)	/* XPKF */
+	if (read32b(f, NULL) != 0x58504b46)	/* XPKF */
 		goto err;
 
-	srclen = read32b(f);
+	srclen = read32b(f, NULL);
 
-	if (read32b(f) != 0x53515348)	/* SQSH */
+	/* Sanity check */
+	if (srclen <= 8 || srclen > 0x100000)
 		goto err;
 
-	destlen = read32b(f);
+	if (read32b(f, NULL) != 0x53515348)	/* SQSH */
+		goto err;
+
+	destlen = read32b(f, NULL);
+	if (destlen < 0 || destlen > 0x100000)
+		goto err;
 
 	if ((src = malloc(srclen + 3)) == NULL)
 		goto err;
@@ -311,7 +359,7 @@ int decrunch_sqsh(FILE * f, FILE * fo)
 	if (fread(src, srclen - 8, 1, f) != 1)
 		goto err3;
 
-	if (unsqsh(src, dest, destlen) != destlen)
+	if (unsqsh(src, srclen, dest, destlen) != destlen)
 		goto err3;
 
 	if (fwrite(dest, destlen, 1, fo) != 1)
@@ -329,3 +377,8 @@ int decrunch_sqsh(FILE * f, FILE * fo)
     err:
 	return -1;
 }
+
+struct depacker libxmp_depacker_sqsh = {
+	test_sqsh,
+	decrunch_sqsh
+};

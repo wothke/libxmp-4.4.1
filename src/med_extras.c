@@ -1,5 +1,5 @@
-/* Extended Module Player core player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -66,7 +66,7 @@ static const int sine[32] = {
 	-255,-250,-235,-212,-180,-141, -97, -49
 };
 
-int med_change_period(struct context_data *ctx, struct channel_data *xc)
+int libxmp_med_change_period(struct context_data *ctx, struct channel_data *xc)
 {
 	struct med_channel_extras *ce = xc->extra;
 	int vib;
@@ -91,7 +91,7 @@ int med_change_period(struct context_data *ctx, struct channel_data *xc)
 }
 
 
-int med_linear_bend(struct context_data *ctx, struct channel_data *xc)
+int libxmp_med_linear_bend(struct context_data *ctx, struct channel_data *xc)
 {
 	struct module_data *m = &ctx->m;
 	struct med_module_extras *me = m->extra;
@@ -116,11 +116,11 @@ int med_linear_bend(struct context_data *ctx, struct channel_data *xc)
 }
 
 
-void med_play_extras(struct context_data *ctx, struct channel_data *xc,
-			int chn, int t)
+void libxmp_med_play_extras(struct context_data *ctx, struct channel_data *xc, int chn)
 {
 	struct module_data *m = &ctx->m;
 	struct player_data *p = &ctx->p;
+	struct xmp_module *mod = &m->mod;
 	struct med_module_extras *me;
 	struct med_channel_extras *ce;
 	struct med_instrument_extras *ie;
@@ -167,17 +167,20 @@ void med_play_extras(struct context_data *ctx, struct channel_data *xc,
 		return;
 	}
 
-	if (t == 0 && TEST(NEW_NOTE)) {
-		ce->arp = ce->aidx = 0;
+	if (p->frame == 0 && TEST(NEW_NOTE)) {
 		ce->period = xc->period;
 		if (TEST(NEW_INS)) {
+			ce->arp = ce->aidx = 0;
 			ce->vp = ce->vc = ce->vw = 0;
 			ce->wp = ce->wc = ce->ww = 0;
+			ce->env_wav = -1;
+			ce->env_idx = 0;
+			ce->flags &= ~MED_SYNTH_ENV_LOOP;
+			ce->vv = 0;
+			ce->wv = 0;
+			ce->vs = ie->vts;
+			ce->ws = ie->wts;
 		}
-		ce->vv = 0;
-		ce->wv = 0;
-		ce->vs = ie->vts;
-		ce->ws = ie->wts;
 	}
 
 	if (ce->vs > 0 && ce->vc-- == 0) {
@@ -189,6 +192,8 @@ void med_play_extras(struct context_data *ctx, struct channel_data *xc,
 		}
 
 		loop = jws = 0;
+
+		/* Volume commands */
 
 	    next_vt:
 		switch (b = VT) {
@@ -208,8 +213,11 @@ void med_play_extras(struct context_data *ctx, struct channel_data *xc,
 			jws = VT;
 			break;
 		case 0xf5:	/* EN2 */
+			ce->env_wav = VT;
+			ce->flags |= MED_SYNTH_ENV_LOOP;
+			break;
 		case 0xf4:	/* EN1 */
-			VT_SKIP;	/* Not implemented */
+			ce->env_wav = VT;
 			break;
 		case 0xf3:	/* CHU */
 			ce->vv = VT;
@@ -228,10 +236,27 @@ void med_play_extras(struct context_data *ctx, struct channel_data *xc,
 				ce->volume = b;
 		}
 
+	    skip_vol:
+
+		/* volume envelope */
+		if (ce->env_wav >= 0) {
+			int sid = mod->xxi[xc->ins].sub[ce->env_wav].sid;
+			struct xmp_sample *xxs = &mod->xxs[sid];
+			if (xxs->len == 0x80) {		/* sanity check */
+				ce->volume = ((int8)xxs->data[ce->env_idx] + 0x80) >> 2;
+				ce->env_idx++;
+
+				if (ce->env_idx >= 0x80) {
+					if (~ce->flags & MED_SYNTH_ENV_LOOP) {
+						ce->env_wav = -1;
+					}
+					ce->env_idx = 0;
+				}
+			}
+		}
+
 		ce->volume += ce->vv;
 		CLAMP(ce->volume, 0, 64);
-
-	    skip_vol:
 
 		if (ce->ww > 0) {
 			ce->ww--;
@@ -239,6 +264,8 @@ void med_play_extras(struct context_data *ctx, struct channel_data *xc,
 		}
 
 		loop = jvs = 0;
+
+		/* Waveform commands */
 
 	    next_wt:
 		switch (b = WT) {
@@ -266,7 +293,7 @@ void med_play_extras(struct context_data *ctx, struct channel_data *xc,
 			while (WT != 0xfd) ;
 			break;
 		case 0xfa:	/* JVS */
-			jws = WT;
+			jvs = WT;
 			break;
 		case 0xf7:	/* VWF */
 			ce->vwf = WT;
@@ -296,14 +323,13 @@ void med_play_extras(struct context_data *ctx, struct channel_data *xc,
 			xxi = &m->mod.xxi[xc->ins];
 			if (b < xxi->nsm && xxi->sub[b].sid != xc->smp) {
 				xc->smp = xxi->sub[b].sid;
-				virt_setsmp(ctx, chn, xc->smp);
+				libxmp_virt_setsmp(ctx, chn, xc->smp);
 			}
 		}
-		xc->period += ce->wv;
 
 	    skip_wav:
-		;
-		/* xc->period += ce->wv; */
+
+		xc->period += ce->wv;
 	}
 
 	if (jws) {
@@ -317,7 +343,7 @@ void med_play_extras(struct context_data *ctx, struct channel_data *xc,
 	}
 }
 
-int med_new_instrument_extras(struct xmp_instrument *xxi)
+int libxmp_med_new_instrument_extras(struct xmp_instrument *xxi)
 {
 	xxi->extra = calloc(1, sizeof(struct med_instrument_extras));
 	if (xxi->extra == NULL)
@@ -327,7 +353,7 @@ int med_new_instrument_extras(struct xmp_instrument *xxi)
 	return 0;
 }
 
-int med_new_channel_extras(struct channel_data *xc)
+int libxmp_med_new_channel_extras(struct channel_data *xc)
 {
 	xc->extra = calloc(1, sizeof(struct med_channel_extras));
 	if (xc->extra == NULL)
@@ -337,17 +363,17 @@ int med_new_channel_extras(struct channel_data *xc)
 	return 0;
 }
 
-void med_reset_channel_extras(struct channel_data *xc)
+void libxmp_med_reset_channel_extras(struct channel_data *xc)
 {
 	memset((char *)xc->extra + 4, 0, sizeof(struct med_channel_extras) - 4);
 }
 
-void med_release_channel_extras(struct channel_data *xc)
+void libxmp_med_release_channel_extras(struct channel_data *xc)
 {
 	free(xc->extra);
 }
 
-int med_new_module_extras(struct module_data *m)
+int libxmp_med_new_module_extras(struct module_data *m)
 {
 	struct med_module_extras *me;
 	struct xmp_module *mod = &m->mod;
@@ -369,7 +395,7 @@ int med_new_module_extras(struct module_data *m)
 	return 0;
 }
 
-void med_release_module_extras(struct module_data *m)
+void libxmp_med_release_module_extras(struct module_data *m)
 {
 	struct med_module_extras *me;
 	struct xmp_module *mod = &m->mod;
@@ -392,7 +418,7 @@ void med_release_module_extras(struct module_data *m)
 	free(m->extra);
 }
 
-void med_extras_process_fx(struct context_data *ctx, struct channel_data *xc,
+void libxmp_med_extras_process_fx(struct context_data *ctx, struct channel_data *xc,
 			int chn, uint8 note, uint8 fxt, uint8 fxp, int fnum)
 {
 	switch (fxt) {
@@ -403,7 +429,7 @@ void med_extras_process_fx(struct context_data *ctx, struct channel_data *xc,
 	}
 }
 
-void med_hold_hack(struct context_data *ctx, int pat, int chn, int row)
+void libxmp_med_hold_hack(struct context_data *ctx, int pat, int chn, int row)
 {
 	struct module_data *m = &ctx->m;
 	struct xmp_module *mod = &m->mod;

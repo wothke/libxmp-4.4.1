@@ -5,11 +5,11 @@
 extern "C" {
 #endif
 
-#define XMP_VERSION "4.3.0"
-#define XMP_VERCODE 0x040300
+#define XMP_VERSION "4.4.1"
+#define XMP_VERCODE 0x040401
 #define XMP_VER_MAJOR 4
-#define XMP_VER_MINOR 3
-#define XMP_VER_RELEASE 0
+#define XMP_VER_MINOR 4
+#define XMP_VER_RELEASE 1
 
 #if defined(_WIN32) && !defined(__CYGWIN__)
 # if defined(BUILDING_STATIC)
@@ -51,9 +51,12 @@ extern "C" {
 #define XMP_PLAYER_CFLAGS	5	/* Player flags for current module */
 #define XMP_PLAYER_SMPCTL	6	/* Sample control flags */
 #define XMP_PLAYER_VOLUME	7	/* Player module volume */
-#define XMP_PLAYER_STATE	8	/* Internal player state */
+#define XMP_PLAYER_STATE	8	/* Internal player state (read only) */
 #define XMP_PLAYER_SMIX_VOLUME	9	/* SMIX volume */
 #define XMP_PLAYER_DEFPAN	10	/* Default pan setting */
+#define XMP_PLAYER_MODE 	11	/* Player personality */
+#define XMP_PLAYER_MIXER_TYPE	12	/* Current mixer (read only) */
+#define XMP_PLAYER_VOICES	13	/* Maximum number of mixer voices */
 
 /* interpolation types */
 #define XMP_INTERP_NEAREST	0	/* Nearest neighbor */
@@ -73,6 +76,25 @@ extern "C" {
 #define XMP_FLAGS_VBLANK	(1 << 0) /* Use vblank timing */
 #define XMP_FLAGS_FX9BUG	(1 << 1) /* Emulate FX9 bug */
 #define XMP_FLAGS_FIXLOOP	(1 << 2) /* Emulate sample loop bug */
+#define XMP_FLAGS_A500		(1 << 3) /* Use Paula mixer in Amiga modules */
+
+/* player modes */
+#define XMP_MODE_AUTO		0	/* Autodetect mode (default) */
+#define XMP_MODE_MOD		1	/* Play as a generic MOD player */
+#define XMP_MODE_NOISETRACKER	2	/* Play using Noisetracker quirks */
+#define XMP_MODE_PROTRACKER	3	/* Play using Protracker quirks */
+#define XMP_MODE_S3M		4	/* Play as a generic S3M player */
+#define XMP_MODE_ST3		5	/* Play using ST3 bug emulation */
+#define XMP_MODE_ST3GUS		6	/* Play using ST3+GUS quirks */
+#define XMP_MODE_XM		7	/* Play as a generic XM player */
+#define XMP_MODE_FT2		8	/* Play using FT2 bug emulation */
+#define XMP_MODE_IT		9	/* Play using IT quirks */
+#define XMP_MODE_ITSMP		10	/* Play using IT sample mode quirks */
+
+/* mixer types */
+#define XMP_MIXER_STANDARD	0	/* Standard mixer */
+#define XMP_MIXER_A500		1	/* Amiga 500 */
+#define XMP_MIXER_A500F		2	/* Amiga 500 with led filter */
 
 /* sample flags */
 #define XMP_SMPCTL_SKIP		(1 << 0) /* Don't load samples */
@@ -104,6 +126,8 @@ struct xmp_channel {
 	int vol;			/* Channel volume */
 #define XMP_CHANNEL_SYNTH	(1 << 0)  /* Channel is synthesized */
 #define XMP_CHANNEL_MUTE  	(1 << 1)  /* Channel is muted */
+#define XMP_CHANNEL_SPLIT	(1 << 2)  /* Split Amiga channel in bits 5-4 */
+#define XMP_CHANNEL_SURROUND	(1 << 4)  /* Surround channel */
 	int flg;			/* Channel flags */
 };
 
@@ -169,7 +193,7 @@ struct xmp_instrument {
 		int vde;		/* Vibrato depth */
 		int vra;		/* Vibrato rate */
 		int vsw;		/* Vibrato sweep */
-		int rvv;		/* Random volume variation (IT) */
+		int rvv;		/* Random volume/pan variation (IT) */
 		int sid;		/* Sample number */
 #define XMP_INST_NNA_CUT	0x00
 #define XMP_INST_NNA_CONT	0x01
@@ -202,6 +226,8 @@ struct xmp_sample {
 #define XMP_SAMPLE_LOOP_BIDIR	(1 << 2)  /* Bidirectional sample loop */
 #define XMP_SAMPLE_LOOP_REVERSE	(1 << 3)  /* Backwards sample loop */
 #define XMP_SAMPLE_LOOP_FULL	(1 << 4)  /* Play full sample before looping */
+#define XMP_SAMPLE_SLOOP	(1 << 5)  /* Sample has sustain loop */
+#define XMP_SAMPLE_SLOOP_BIDIR	(1 << 6)  /* Bidirectional sustain loop */
 #define XMP_SAMPLE_SYNTH	(1 << 15) /* Data contains synth patch */
 	int flg;			/* Flags */
 	unsigned char *data;		/* Sample data */
@@ -230,7 +256,7 @@ struct xmp_module {
 	struct xmp_track **xxt;		/* Tracks */
 	struct xmp_instrument *xxi;	/* Instruments */
 	struct xmp_sample *xxs;		/* Samples */
-	struct xmp_channel xxc[64];	/* Channel info */
+	struct xmp_channel xxc[XMP_MAX_CHANNELS]; /* Channel info */
 	unsigned char xxo[XMP_MAX_MOD_LENGTH];	/* Orders */
 };
 
@@ -238,8 +264,6 @@ struct xmp_test_info {
 	char name[XMP_NAME_SIZE];	/* Module title */
 	char type[XMP_NAME_SIZE];	/* Module format */
 };
-
-#define XMP_PERIOD_BASE	6847		/* C4 period */
 
 struct xmp_module_info {
 	unsigned char md5[16];		/* MD5 message digest */
@@ -271,7 +295,7 @@ struct xmp_frame_info {			/* Current frame information */
 	int sequence;			/* Current sequence */
 
 	struct xmp_channel_info {	/* Current channel information */
-		unsigned int period;	/* Sample period */
+		unsigned int period;	/* Sample period (* 4096) */
 		unsigned int position;	/* Sample position */
 		short pitchbend;	/* Linear bend from base note*/
 		unsigned char note;	/* Current base note number */

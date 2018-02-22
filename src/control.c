@@ -1,5 +1,5 @@
-/* Extended Module Player core player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -44,6 +44,7 @@ xmp_context xmp_create_context()
 
 	ctx->state = XMP_STATE_UNLOADED;
 	ctx->m.defpan = 100;
+	ctx->s.numvoc = SMIX_NUMVOC;
 
 	return (xmp_context)ctx;
 }
@@ -64,45 +65,57 @@ static void set_position(struct context_data *ctx, int pos, int dir)
 	struct module_data *m = &ctx->m;
 	struct xmp_module *mod = &m->mod;
 	struct flow_control *f = &p->flow;
-	int seq, start;
+	int seq;
+	int has_marker;
 
 	/* If dir is 0, we can jump to a different sequence */
 	if (dir == 0) {
-		seq = get_sequence(ctx, pos);
+		seq = libxmp_get_sequence(ctx, pos);
 	} else {
 		seq = p->sequence;
 	}
 
-	if (seq == 0xff)
+	if (seq == 0xff) {
 		return;
+	}
 
-	start = m->seq_data[seq].entry_point;
+	has_marker = HAS_QUIRK(QUIRK_MARKER);
 
 	if (seq >= 0) {
+		int start = m->seq_data[seq].entry_point;
+
 		p->sequence = seq;
 
 		if (pos >= 0) {
-			if (mod->xxo[pos] == 0xff) {
-				return;
-			}
+			int pat;
 
-			while (mod->xxo[pos] == 0xfe && pos > start) {
+			while (has_marker && mod->xxo[pos] == 0xfe) {
 				if (dir < 0) {
-					pos--;
+					if (pos > start) {
+						pos--;
+					}
 				} else {
 					pos++;
 				}
 			}
+			pat = mod->xxo[pos];
 
-			if (pos > p->scan[seq].ord) {
-				f->end_point = 0;
-			} else {
-				f->num_rows = mod->xxp[mod->xxo[p->ord]]->rows;
-				f->end_point = p->scan[seq].num;
+			if (pat < mod->pat) {
+				if (has_marker && pat == 0xff) {
+					return;
+				}
+
+				if (pos > p->scan[seq].ord) {
+					f->end_point = 0;
+				} else {
+					f->num_rows = mod->xxp[pat]->rows;
+					f->end_point = p->scan[seq].num;
+					f->jumpline = 0;
+				}
 			}
 		}
 
-		if (pos < m->mod.len) {
+		if (pos < mod->len) {
 			if (pos == 0) {
 				p->pos = -1;
 			} else {
@@ -199,7 +212,7 @@ int xmp_seek_time(xmp_context opaque, int time)
 		if (pat >= m->mod.pat) {
 			continue;
 		}
-		if (get_sequence(ctx, i) != p->sequence) {
+		if (libxmp_get_sequence(ctx, i) != p->sequence) {
 			continue;
 		}
 		t = m->xxo_info[i].time;
@@ -266,10 +279,13 @@ extern int xmp_set_player_v41__(xmp_context, int, int)
 	__attribute__((alias("xmp_set_player_v40__")));
 extern int xmp_set_player_v43__(xmp_context, int, int)
 	__attribute__((alias("xmp_set_player_v40__")));
+extern int xmp_set_player_v44__(xmp_context, int, int)
+	__attribute__((alias("xmp_set_player_v40__")));
 
 asm(".symver xmp_set_player_v40__, xmp_set_player@XMP_4.0");
 asm(".symver xmp_set_player_v41__, xmp_set_player@XMP_4.1");
-asm(".symver xmp_set_player_v43__, xmp_set_player@@XMP_4.3");
+asm(".symver xmp_set_player_v43__, xmp_set_player@XMP_4.3");
+asm(".symver xmp_set_player_v44__, xmp_set_player@@XMP_4.4");
 
 #define xmp_set_player__ xmp_set_player_v40__
 #else
@@ -284,10 +300,17 @@ int xmp_set_player__(xmp_context opaque, int parm, int val)
 	struct mixer_data *s = &ctx->s;
 	int ret = -XMP_ERROR_INVALID;
 
+
 	if (parm == XMP_PLAYER_SMPCTL || parm == XMP_PLAYER_DEFPAN) {
 		/* these should be set before loading the module */
-		if (ctx->state >= XMP_STATE_LOADED)
+		if (ctx->state >= XMP_STATE_LOADED) {
 			return -XMP_ERROR_STATE;
+		}
+	} else if (parm == XMP_PLAYER_VOICES) {
+		/* these should be set before start playing */
+		if (ctx->state >= XMP_STATE_PLAYING) {
+			return -XMP_ERROR_STATE;
+		}
 	} else if (ctx->state < XMP_STATE_PLAYING) {
 		return -XMP_ERROR_STATE;
 	}
@@ -316,11 +339,7 @@ int xmp_set_player__(xmp_context opaque, int parm, int val)
 		ret = 0;
 		break;
 	case XMP_PLAYER_FLAGS: {
-		int vblank = p->flags & XMP_FLAGS_VBLANK;
 		p->player_flags = val;
-		p->flags |= val;
-		if (vblank != (p->flags & XMP_FLAGS_VBLANK))
-			scan_sequences(ctx);
 		ret = 0;
 		break; }
 
@@ -329,7 +348,7 @@ int xmp_set_player__(xmp_context opaque, int parm, int val)
 		int vblank = p->flags & XMP_FLAGS_VBLANK;
 		p->flags = val;
 		if (vblank != (p->flags & XMP_FLAGS_VBLANK))
-			scan_sequences(ctx);
+			libxmp_scan_sequences(ctx);
 		ret = 0;
 		break; }
 	case XMP_PLAYER_SMPCTL:
@@ -356,6 +375,17 @@ int xmp_set_player__(xmp_context opaque, int parm, int val)
 			ret = 0;
 		}
 		break;
+
+	/* 4.4 */
+	case XMP_PLAYER_MODE:
+		p->mode = val;
+		libxmp_set_player_mode(ctx);
+		libxmp_scan_sequences(ctx);
+		ret = 0;
+		break;
+	case XMP_PLAYER_VOICES:
+		s->numvoc = val;
+		break;
 	}
 
 	return ret;
@@ -368,11 +398,14 @@ extern int xmp_get_player_v42__(xmp_context, int)
 	__attribute__((alias("xmp_get_player_v40__")));
 extern int xmp_get_player_v43__(xmp_context, int)
 	__attribute__((alias("xmp_get_player_v40__")));
+extern int xmp_get_player_v44__(xmp_context, int)
+	__attribute__((alias("xmp_get_player_v40__")));
 
 asm(".symver xmp_get_player_v40__, xmp_get_player@XMP_4.0");
 asm(".symver xmp_get_player_v41__, xmp_get_player@XMP_4.1");
 asm(".symver xmp_get_player_v42__, xmp_get_player@XMP_4.2");
-asm(".symver xmp_get_player_v43__, xmp_get_player@@XMP_4.3");
+asm(".symver xmp_get_player_v43__, xmp_get_player@XMP_4.3");
+asm(".symver xmp_get_player_v44__, xmp_get_player@@XMP_4.4");
 
 #define xmp_get_player__ xmp_get_player_v40__
 #else
@@ -432,6 +465,28 @@ int xmp_get_player__(xmp_context opaque, int parm)
 	/* 4.3 */
 	case XMP_PLAYER_DEFPAN:
 		ret = m->defpan;
+		break;
+
+	/* 4.4 */
+	case XMP_PLAYER_MODE:
+		ret = p->mode;
+		break;
+	case XMP_PLAYER_MIXER_TYPE:
+		ret = XMP_MIXER_STANDARD;
+		if (p->flags & XMP_FLAGS_A500) {
+			if (IS_AMIGA_MOD()) {
+#ifdef LIBXMP_PAULA_SIMULATOR
+				if (p->filter) {
+					ret = XMP_MIXER_A500F;
+				} else {
+					ret = XMP_MIXER_A500;
+				}
+#endif
+			}
+		}
+		break;
+	case XMP_PLAYER_VOICES:
+		ret = s->numvoc;
 		break;
 	}
 

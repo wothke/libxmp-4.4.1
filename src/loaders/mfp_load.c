@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -39,7 +39,7 @@
 static int mfp_test(HIO_HANDLE *, char *, const int);
 static int mfp_load(struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader mfp_loader = {
+const struct format_loader libxmp_loader_mfp = {
 	"Magnetic Fields Packer",
 	mfp_test,
 	mfp_load
@@ -94,7 +94,7 @@ static int mfp_test(HIO_HANDLE *f, char *t, const int start)
 	if (readmem16b(buf + 378) != readmem16b(buf + 380))
 		return -1;
 
-	read_title(f, t, 0);
+	libxmp_read_title(f, t, 0);
 
 	return 0;
 }
@@ -114,19 +114,19 @@ static int mfp_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	LOAD_INIT();
 
-	set_type(m, "Magnetic Fields Packer");
+	libxmp_set_type(m, "Magnetic Fields Packer");
 	MODULE_INFO();
 
 	mod->chn = 4;
 	mod->ins = mod->smp = 31;
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	for (i = 0; i < 31; i++) {
 		int loop_size;
 
-		if (subinstrument_alloc(mod, i, 1) < 0)
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 			return -1;
 		
 		mod->xxs[i].len = 2 * hio_read16b(f);
@@ -154,23 +154,19 @@ static int mfp_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	mod->len = mod->pat = hio_read8(f);
 	hio_read8(f);		/* restart */
 
-	for (i = 0; i < 128; i++)
-		mod->xxo[i] = hio_read8(f);
-
-#if 0
 	for (i = 0; i < 128; i++) {
 		mod->xxo[i] = hio_read8(f);
-		if (mod->xxo[i] > mod->pat)
-			mod->pat = mod->xxo[i];
 	}
-	mod->pat++;
-#endif
+
+	if (hio_error(f)) {
+		return -1;
+	}
 
 	mod->trk = mod->pat * mod->chn;
 
 	/* Read and convert patterns */
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	size1 = hio_read16b(f);
@@ -187,7 +183,7 @@ static int mfp_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	pat_addr = hio_tell(f);
 
 	for (i = 0; i < mod->pat; i++) {
-		if (pattern_tracks_alloc(mod, i, 64) < 0)
+		if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 			return -1;
 
 		for (j = 0; j < 4; j++) {
@@ -200,7 +196,7 @@ static int mfp_load(struct module_data *m, HIO_HANDLE *f, const int start)
 					for (y = 0; y < 4; y++, row++) {
 						event = &EVENT(i, j, row);
 						memcpy(mod_event, &buf[buf[buf[buf[k] + x] + y] * 2], 4);
-						decode_protracker_event(event, mod_event);
+						libxmp_decode_protracker_event(event, mod_event);
 					}
 				}
 			}
@@ -240,14 +236,16 @@ static int mfp_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	}
 
 	for (i = 0; i < mod->ins; i++) {
-		if (load_sample(m, s, SAMPLE_FLAG_FULLREP,
-				  &mod->xxs[mod->xxi[i].sub[0].sid], NULL) < 0)
+		if (libxmp_load_sample(m, s, SAMPLE_FLAG_FULLREP,
+				&mod->xxs[mod->xxi[i].sub[0].sid], NULL) < 0) {
+			free(s);
 			return -1;
+		}
 	}
 
 	hio_close(s);
 
-	m->quirk |= QUIRK_MODRNG;
+	m->period_type = PERIOD_MODRNG;
 
 	return 0;
 

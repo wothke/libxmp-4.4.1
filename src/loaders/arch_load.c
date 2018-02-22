@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 #include "loader.h"
@@ -11,13 +25,19 @@
 
 #define MAGIC_MUSX	MAGIC4('M','U','S','X')
 #define MAGIC_MNAM	MAGIC4('M','N','A','M')
+#define MAGIC_SNAM	MAGIC4('S','N','A','M')
+#define MAGIC_SVOL	MAGIC4('S','V','O','L')
+#define MAGIC_SLEN	MAGIC4('S','L','E','N')
+#define MAGIC_ROFS	MAGIC4('R','O','F','S')
+#define MAGIC_RLEN	MAGIC4('R','L','E','N')
+#define MAGIC_SDAT	MAGIC4('S','D','A','T')
 
 
 static int arch_test (HIO_HANDLE *, char *, const int);
 static int arch_load (struct module_data *, HIO_HANDLE *, const int);
 
 
-const struct format_loader arch_loader = {
+const struct format_loader libxmp_loader_arch = {
 	"Archimedes Tracker",
 	arch_test,
 	arch_load
@@ -50,8 +70,9 @@ static uint8 convert_vol(uint8 vol) {
 
 static int arch_test(HIO_HANDLE *f, char *t, const int start)
 {
-	if (hio_read32b(f) != MAGIC_MUSX)
+	if (hio_read32b(f) != MAGIC_MUSX) {
 		return -1;
+	}
 
 	hio_read32l(f);
 
@@ -59,15 +80,20 @@ static int arch_test(HIO_HANDLE *f, char *t, const int start)
 		uint32 id = hio_read32b(f);
 		uint32 len = hio_read32l(f);
 
+		/* Sanity check */
+		if (len > 0x100000) {
+			return -1;
+		}
+
 		if (id == MAGIC_MNAM) {
-			read_title(f, t, 32);
+			libxmp_read_title(f, t, 32);
 			return 0;
 		}
 
 		hio_seek(f, len, SEEK_CUR);
 	}
 
-	read_title(f, t, 0);
+	libxmp_read_title(f, t, 0);
 
 	return 0;
 }
@@ -172,6 +198,11 @@ static int get_mvox(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 
 	mod->chn = hio_read32l(f);
 
+	/* Sanity check */
+	if (mod->chn < 1 || mod->chn > 8) {
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -181,9 +212,11 @@ static int get_ster(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	struct local_data *data = (struct local_data *)parm;
 	int i;
 
-	hio_read(data->ster, 1, 8, f);
+	if (hio_read(data->ster, 1, 8, f) != 8) {
+		return -1;
+	}
 	
-	for (i=0; i < mod->chn; i++) {
+	for (i = 0; i < mod->chn; i++) {
 		if (data->ster[i] > 0 && data->ster[i] < 8) {
 			mod->xxc[i].pan = 42 * data->ster[i] - 40;
 		}
@@ -196,7 +229,8 @@ static int get_mnam(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 {
 	struct xmp_module *mod = &m->mod;
 
-	hio_read(mod->name, 1, 32, f);
+	if (hio_read(mod->name, 1, 32, f) != 32)
+		return -1;
 
 	return 0;
 }
@@ -214,6 +248,10 @@ static int get_mlen(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 
 	mod->len = hio_read32l(f);
 
+	/* Sanity check */
+	if (mod->len > 0xff)
+		return -1;
+
 	return 0;
 }
 
@@ -223,6 +261,10 @@ static int get_pnum(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 
 	mod->pat = hio_read32l(f);
 
+	/* Sanity check */
+	if (mod->pat > 64 )
+		return -1;
+
 	return 0;
 }
 
@@ -230,7 +272,8 @@ static int get_plen(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 {
 	struct local_data *data = (struct local_data *)parm;
 
-	hio_read(data->rows, 1, 64, f);
+	if (hio_read(data->rows, 1, 64, f) != 64)
+		return -1;
 
 	return 0;
 }
@@ -240,7 +283,7 @@ static int get_sequ(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	struct xmp_module *mod = &m->mod;
 
 	hio_read(mod->xxo, 1, 128, f);
-	set_type(m, "Archimedes Tracker");
+	libxmp_set_type(m, "Archimedes Tracker");
 	MODULE_INFO();
 
 	return 0;
@@ -259,13 +302,17 @@ static int get_patt(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 		data->max_pat = 0;
 		mod->trk = mod->pat * mod->chn;
 
-		if (pattern_init(mod) < 0)
+		if (libxmp_init_pattern(mod) < 0)
 			return -1;
 	}
 
+	/* Sanity check */
+	if (data->max_pat >= mod->pat || data->max_pat >= 64)
+		return -1;
+
         i = data->max_pat;
 
-	if (pattern_tracks_alloc(mod, i, data->rows[i]) < 0)
+	if (libxmp_alloc_pattern_tracks(mod, i, data->rows[i]) < 0)
 		return -1;
 
 	for (j = 0; j < data->rows[i]; j++) {
@@ -297,7 +344,7 @@ static int get_samp(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 
 	if (!data->sflag) {
 		mod->smp = mod->ins = 36;
-		if (instrument_init(mod) < 0)
+		if (libxmp_init_instrument(m) < 0)
 			return -1;
 
 		D_(D_INFO "Instruments: %d", mod->ins);
@@ -316,38 +363,53 @@ static int get_samp(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	i = data->max_ins;
 
 	mod->xxi[i].nsm = 1;
-	if (subinstrument_alloc(mod, i, 1) < 0)
+	if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 		return -1;
 
-	hio_read32l(f);	/* SNAM */
+	if (hio_read32b(f) != MAGIC_SNAM)	/* SNAM */
+		return -1;
+
 	{
 		/* should usually be 0x14 but zero is not unknown */
 		int name_len = hio_read32l(f);
-		if (name_len < 32)
-			hio_read(mod->xxi[i].name, 1, name_len, f);
+
+		/* Sanity check */
+		if (name_len < 0 || name_len > 32)
+			return -1;
+
+		hio_read(mod->xxi[i].name, 1, name_len, f);
 	}
-	hio_read32l(f);	/* SVOL */
+
+	if (hio_read32b(f) != MAGIC_SVOL)	/* SVOL */
+		return -1;
 	hio_read32l(f);
 	/* mod->xxi[i].sub[0].vol = convert_vol(hio_read32l(f)); */
 	mod->xxi[i].sub[0].vol = hio_read32l(f) & 0xff;
-	hio_read32l(f);	/* SLEN */
+
+	if (hio_read32b(f) != MAGIC_SLEN)	/* SLEN */
+		return -1;
 	hio_read32l(f);
 	mod->xxs[i].len = hio_read32l(f);
-	hio_read32l(f);	/* ROFS */
+
+	if (hio_read32b(f) != MAGIC_ROFS)	/* ROFS */
+		return -1;
 	hio_read32l(f);
 	mod->xxs[i].lps = hio_read32l(f);
-	hio_read32l(f);	/* RLEN */
+
+	if (hio_read32b(f) != MAGIC_RLEN)	/* RLEN */
+		return -1;
 	hio_read32l(f);
 	mod->xxs[i].lpe = hio_read32l(f);
 
-	hio_read32l(f);	/* SDAT */
+	if (hio_read32b(f) != MAGIC_SDAT)	/* SDAT */
+		return -1;
 	hio_read32l(f);
 	hio_read32l(f);	/* 0x00000000 */
 
 	mod->xxi[i].sub[0].sid = i;
 	mod->xxi[i].sub[0].pan = 0x80;
 
-	m->vol_table = (int *)arch_vol_table;
+	m->vol_table = (int *)libxmp_arch_vol_table;
 	m->volbase = 0xff;
 
 	if (mod->xxs[i].lpe > 2) {
@@ -360,7 +422,7 @@ static int get_samp(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 		mod->xxs[i].lpe = mod->xxs[i].len;
 	}
 
-	if (load_sample(m, f, SAMPLE_FLAG_VIDC, &mod->xxs[i], NULL) < 0)
+	if (libxmp_load_sample(m, f, SAMPLE_FLAG_VIDC, &mod->xxs[i], NULL) < 0)
 		return -1;
 
 	D_(D_INFO "[%2X] %-20.20s %05x %05x %05x %c V%02x",
@@ -391,35 +453,36 @@ static int arch_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	data.pflag = data.sflag = 0;
 	data.year = data.month = data.day = 0;
 
-	handle = iff_new();
+	handle = libxmp_iff_new();
 	if (handle == NULL)
 		return -1;
 
 	/* IFF chunk IDs */
-	iff_register(handle, "TINF", get_tinf);
-	iff_register(handle, "MVOX", get_mvox);
-	iff_register(handle, "STER", get_ster);
-	iff_register(handle, "MNAM", get_mnam);
-	iff_register(handle, "ANAM", get_anam);
-	iff_register(handle, "MLEN", get_mlen);
-	iff_register(handle, "PNUM", get_pnum);
-	iff_register(handle, "PLEN", get_plen);
-	iff_register(handle, "SEQU", get_sequ);
-	iff_register(handle, "PATT", get_patt);
-	iff_register(handle, "SAMP", get_samp);
+	libxmp_iff_register(handle, "TINF", get_tinf);
+	libxmp_iff_register(handle, "MVOX", get_mvox);
+	libxmp_iff_register(handle, "STER", get_ster);
+	libxmp_iff_register(handle, "MNAM", get_mnam);
+	libxmp_iff_register(handle, "ANAM", get_anam);
+	libxmp_iff_register(handle, "MLEN", get_mlen);
+	libxmp_iff_register(handle, "PNUM", get_pnum);
+	libxmp_iff_register(handle, "PLEN", get_plen);
+	libxmp_iff_register(handle, "SEQU", get_sequ);
+	libxmp_iff_register(handle, "PATT", get_patt);
+	libxmp_iff_register(handle, "SAMP", get_samp);
 
-	iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
+	libxmp_iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
 
 	/* Load IFF chunks */
-	if (iff_load(handle, m, f, &data) < 0) {
-		iff_release(handle);
+	if (libxmp_iff_load(handle, m, f, &data) < 0) {
+		libxmp_iff_release(handle);
 		return -1;
 	}
 
-	iff_release(handle);
+	libxmp_iff_release(handle);
 
-	for (i = 0; i < mod->chn; i++)
-		mod->xxc[i].pan = (((i + 3) / 2) % 2) * 0xff;
+	for (i = 0; i < mod->chn; i++) {
+		mod->xxc[i].pan = DEFPAN((((i + 3) / 2) % 2) * 0xff);
+	}
 
 	return 0;
 }

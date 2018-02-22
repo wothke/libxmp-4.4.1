@@ -1,8 +1,9 @@
 /*
  *  NoiseRunner.c	Copyright (C) 1997 Asle / ReDoX
- *			Copyright (C) 2010 Claudio Matsuoka
  *
  *  Converts NoiseRunner packed MODs back to Protracker
+ *
+ *  Modified in 2010,2014 by Claudio Matsuoka
  */
 
 #include <string.h>
@@ -16,7 +17,7 @@ static int fine_table[] = {
 };
 
 
-static int depack_nru(FILE *in, FILE *out)
+static int depack_nru(HIO_HANDLE *in, FILE *out)
 {
 	uint8 tmp[1025];
 	uint8 ptable[128];
@@ -33,15 +34,15 @@ static int depack_nru(FILE *in, FILE *out)
 		int vol, size, addr, start, lsize;
 
 		pw_write_zero(out, 22);		/* sample name */
-		read8(in);			/* bypass 0x00 */
-		vol = read8(in);		/* read volume */
-		addr = read32b(in);		/* read sample address */
-		write16b(out, size = read16b(in)); /* read/write sample size */
+		hio_read8(in);			/* bypass 0x00 */
+		vol = hio_read8(in);		/* read volume */
+		addr = hio_read32b(in);		/* read sample address */
+		write16b(out, size = hio_read16b(in)); /* read/write sample size */
 		ssize += size * 2;
-		start = read32b(in);		/* read loop start address */
+		start = hio_read32b(in);		/* read loop start address */
 
-		lsize = read16b(in);		/* read loop size */
-		fine = read16b(in);		/* read finetune ?!? */
+		lsize = hio_read16b(in);		/* read loop size */
+		fine = hio_read16b(in);		/* read finetune ?!? */
 
 		for (j = 0; j < 16; j++) {
 			if (fine == fine_table[j]) {
@@ -58,13 +59,13 @@ static int depack_nru(FILE *in, FILE *out)
 		write16b(out, lsize);		/* write loop size */
 	}
 
-	fseek(in, 950, SEEK_SET);
-	write8(out, read8(in));			/* size of pattern list */
-	write8(out, read8(in));			/* ntk byte */
+	hio_seek(in, 950, SEEK_SET);
+	write8(out, hio_read8(in));			/* size of pattern list */
+	write8(out, hio_read8(in));			/* ntk byte */
 
 	/* pattern table */
 	max_pat = 0;
-	fread(ptable, 128, 1, in);
+	hio_read(ptable, 128, 1, in);
 	fwrite(ptable, 128, 1, out);
 	for (i = 0; i < 128; i++) {
 		if (ptable[i] > max_pat)
@@ -75,10 +76,10 @@ static int depack_nru(FILE *in, FILE *out)
 	write32b(out, PW_MOD_MAGIC);
 
 	/* pattern data */
-	fseek (in, 0x043c, SEEK_SET);
+	hio_seek(in, 0x043c, SEEK_SET);
 	for (i = 0; i < max_pat; i++) {
 		memset(pat_data, 0, 1025);
-		fread(tmp, 1024, 1, in);
+		hio_read(tmp, 1024, 1, in);
 		for (j = 0; j < 256; j++) {
 			ins = (tmp[j * 4 + 3] >> 3) & 0x1f;
 			note = tmp[j * 4 + 2];
@@ -112,9 +113,8 @@ static int depack_nru(FILE *in, FILE *out)
 
 static int test_nru(uint8 *data, char *t, int s)
 {
-	int i, j, k, l;
-	int start = 0;
-	int ssize;
+	int i;
+	int len, psize, ssize;
 
 	PW_REQUEST_DATA(s, 1500);
 
@@ -125,63 +125,59 @@ static int test_nru(uint8 *data, char *t, int s)
 	}
 #endif
 
-	if (readmem32b(data + start + 1080) != PW_MOD_MAGIC)
+	if (readmem32b(data + 1080) != PW_MOD_MAGIC)
 		return -1;
 
 	/* test 2 */
 	ssize = 0;
 	for (i = 0; i < 31; i++)
-		ssize += 2 * readmem16b(data + start + 6 + i * 16);
+		ssize += 2 * readmem16b(data + 6 + i * 16);
 	if (ssize == 0)
 		return -1;
 
 	/* test #3 volumes */
 	for (i = 0; i < 31; i++) {
-		if (data[start + 1 + i * 16] > 0x40)
+		if (data[1 + i * 16] > 0x40)
 			return -1;
 	}
 
 	/* test #4  pattern list size */
-	l = data[start + 950];
-	if (l > 127 || l == 0) {
+	len = data[950];
+	if (len == 0 || len > 127) {
 		return -1;
 	}
 
 	/* l holds the size of the pattern list */
-	k = 0;
-	for (j = 0; j < l; j++) {
-		if (data[start + 952 + j] > k)
-			k = data[start + 952 + j];
-		if (data[start + 952 + j] > 127) {
+	psize = 0;
+	for (i = 0; i < len; i++) {
+		int x = data[952 + i];
+		if (x > psize)
+			psize = x;
+		if (x > 127) {
 			return -1;
 		}
 	}
-	/* k holds the highest pattern number */
 	/* test last patterns of the pattern list = 0 ? */
-	while (j != 128) {
-		if (data[start + 952 + j] != 0) {
+	while (i != 128) {
+		if (data[952 + i] != 0) {
 			return -1;
 		}
-		j++;
+		i++;
 	}
-	/* k is the number of pattern in the file (-1) */
-	k += 1;
 
+	psize++;
+	psize <<= 8;
 
 	/* test #5 pattern data ... */
-	for (j = 0; j < (k << 8); j++) {
+	for (i = 0; i < psize; i++) {
+		uint8 *d = data + 1084 + i * 4;
 		/* note > 48h ? */
-		if (data[start + 1086 + j * 4] > 0x48) {
+		if (d[2] > 0x48)
 			return -1;
-		}
-		l = data[start + 1087 + j * 4];
-		if (l & 0x07) {
+		if (d[3] & 0x07)
 			return -1;
-		}
-		l = data[start + 1084 + j * 4];
-		if (l & 0x03) {
+		if (d[0] & 0x03)
 			return -1;
-		}
 	}
 
 	pw_read_title(NULL, t, 0);

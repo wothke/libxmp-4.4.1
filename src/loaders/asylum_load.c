@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -30,7 +30,7 @@
 static int asylum_test(HIO_HANDLE *, char *, const int);
 static int asylum_load(struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader asylum_loader = {
+const struct format_loader libxmp_loader_asylum = {
 	"Asylum Music Format v1.0",
 	asylum_test,
 	asylum_load
@@ -46,7 +46,7 @@ static int asylum_test(HIO_HANDLE *f, char *t, const int start)
 	if (memcmp(buf, "ASYLUM Music Format V1.0\0\0\0\0\0\0\0\0", 32))
 		return -1;
 
-	read_title(f, t, 0);
+	libxmp_read_title(f, t, 0);
 
 	return 0;
 }
@@ -78,18 +78,22 @@ static int asylum_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	MODULE_INFO();
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	/* Read and convert instruments and samples */
 	for (i = 0; i < mod->ins; i++) {
 		uint8 insbuf[37];
 
-		if (subinstrument_alloc(mod, i, 1) < 0)	
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)	{
 			return -1;
+		}
 
-		hio_read(insbuf, 1, 37, f);
-		instrument_name(mod, i, insbuf, 22);
+		if (hio_read(insbuf, 1, 37, f) != 37) {
+			return -1;
+		}
+
+		libxmp_instrument_name(mod, i, insbuf, 22);
 		mod->xxi[i].sub[0].fin = (int8)(insbuf[22] << 4);
 		mod->xxi[i].sub[0].vol = insbuf[23];
 		mod->xxi[i].sub[0].xpo = (int8)insbuf[24];
@@ -113,14 +117,14 @@ static int asylum_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	D_(D_INFO "Module length: %d", mod->len);
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	/* Read and convert patterns */
 	D_(D_INFO "Stored patterns: %d", mod->pat);
 
 	for (i = 0; i < mod->pat; i++) {
-		if (pattern_tracks_alloc(mod, i, 64) < 0)
+		if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 			return -1;
 
 		for (j = 0; j < 64 * mod->chn; j++) {
@@ -137,6 +141,9 @@ static int asylum_load(struct module_data *m, HIO_HANDLE *f, const int start)
 			event->ins = hio_read8(f);
 			event->fxt = hio_read8(f);
 			event->fxp = hio_read8(f);
+			if (hio_error(f)) {
+				return -1;
+			}
 		}
 	}
 
@@ -145,7 +152,7 @@ static int asylum_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	for (i = 0; i < mod->ins; i++) {
 		if (mod->xxs[i].len > 1) {
-			if (load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
+			if (libxmp_load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
 				return -1;
 			mod->xxi[i].nsm = 1;
 		}

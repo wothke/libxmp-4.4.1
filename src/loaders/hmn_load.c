@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 #include "loader.h"
@@ -64,7 +78,7 @@
 static int hmn_test(HIO_HANDLE *, char *, const int);
 static int hmn_load(struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader hmn_loader = {
+const struct format_loader libxmp_loader_hmn = {
 	"His Master's Noise",
 	hmn_test,
 	hmn_load
@@ -87,7 +101,7 @@ static int hmn_test(HIO_HANDLE * f, char *t, const int start)
 		return -1;
 
 	hio_seek(f, start + 0, SEEK_SET);
-	read_title(f, t, 20);
+	libxmp_read_title(f, t, 20);
 
 	return 0;
 }
@@ -186,14 +200,14 @@ static int hmn_load(struct module_data *m, HIO_HANDLE * f, const int start)
 	mod->pat++;
 	mod->trk = mod->chn * mod->pat;
 
-	if (hmn_new_module_extras(m) != 0)
+	if (libxmp_hmn_new_module_extras(m) != 0)
 		return -1;
 
 	strncpy(mod->name, (char *)mh.name, 20);
-	set_type(m, "%s (%4.4s)", "His Master's Noise", mh.magic);
+	libxmp_set_type(m, "%s (%4.4s)", "His Master's Noise", mh.magic);
 	MODULE_INFO();
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	for (i = 0; i < mod->ins; i++) {
@@ -202,11 +216,11 @@ static int hmn_load(struct module_data *m, HIO_HANDLE * f, const int start)
 			snprintf(mod->xxi[i].name, 32,
 				"Mupp %02x %02x %02x", mupp[i].pattno,
 				mupp[i].dataloopstart, mupp[i].dataloopend);
-			if (hmn_new_instrument_extras(&mod->xxi[i]) != 0)
+			if (libxmp_hmn_new_instrument_extras(&mod->xxi[i]) != 0)
 				return -1;
 		} else {
 			mod->xxi[i].nsm = 1;
-			instrument_name(mod, i, mh.ins[i].name, 22);
+			libxmp_instrument_name(mod, i, mh.ins[i].name, 22);
 
 			mod->xxs[i].len = 2 * mh.ins[i].size;
 			mod->xxs[i].lps = 2 * mh.ins[i].loop_start;
@@ -216,7 +230,7 @@ static int hmn_load(struct module_data *m, HIO_HANDLE * f, const int start)
 						XMP_SAMPLE_LOOP : 0;
 		}
 
-		if (subinstrument_alloc(mod, i, mod->xxi[i].nsm) < 0)
+		if (libxmp_alloc_subinstrument(mod, i, mod->xxi[i].nsm) < 0)
 			return -1;
 
 		for (j = 0; j < mod->xxi[i].nsm; j++) {
@@ -228,20 +242,20 @@ static int hmn_load(struct module_data *m, HIO_HANDLE * f, const int start)
 		}
 	}
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	/* Load and convert patterns */
 	D_(D_INFO "Stored patterns: %d", mod->pat);
 
 	for (i = 0; i < mod->pat; i++) {
-		if (pattern_tracks_alloc(mod, i, 64) < 0)
+		if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 			return -1;
 
 		for (j = 0; j < (64 * 4); j++) {
 			event = &EVENT(i, j % 4, j / 4);
 			hio_read(mod_event, 1, 4, f);
-			decode_protracker_event(event, mod_event);
+			libxmp_decode_protracker_event(event, mod_event);
 
 			switch (event->fxt) {
 			case 0x07:
@@ -256,14 +270,14 @@ static int hmn_load(struct module_data *m, HIO_HANDLE * f, const int start)
 		}
 	}
 
-	m->quirk |= QUIRK_MODRNG;
+	m->period_type = PERIOD_MODRNG;
 
 	/* Load samples */
 
 	D_(D_INFO "Stored samples: %d", mod->smp);
 
 	for (i = 0; i < 31; i++) {
-		if (load_sample(m, f, SAMPLE_FLAG_FULLREP,
+		if (libxmp_load_sample(m, f, SAMPLE_FLAG_FULLREP,
 						&mod->xxs[i], NULL) < 0) {
 			return -1;
 		}
@@ -288,7 +302,7 @@ static int hmn_load(struct module_data *m, HIO_HANDLE * f, const int start)
 			mod->xxs[k].lps = 0;
 			mod->xxs[k].lpe = 32;
 			mod->xxs[k].flg = XMP_SAMPLE_LOOP;
-			if (load_sample(m, f, 0, &mod->xxs[k], NULL) < 0)
+			if (libxmp_load_sample(m, f, 0, &mod->xxs[k], NULL) < 0)
 				return -1;
 		}
 

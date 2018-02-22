@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 /* Based on DigiBooster_E.guide from the DigiBoosterPro 2.20 package.
@@ -20,7 +34,7 @@
 static int dbm_test(HIO_HANDLE *, char *, const int);
 static int dbm_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader dbm_loader = {
+const struct format_loader libxmp_loader_dbm = {
 	"DigiBooster Pro",
 	dbm_test,
 	dbm_load
@@ -32,7 +46,7 @@ static int dbm_test(HIO_HANDLE * f, char *t, const int start)
 		return -1;
 
 	hio_seek(f, 12, SEEK_CUR);
-	read_title(f, t, 44);
+	libxmp_read_title(f, t, 44);
 
 	return 0;
 }
@@ -46,19 +60,58 @@ struct local_data {
 static int get_info(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 {
 	struct xmp_module *mod = &m->mod;
+	int val;
 
-	mod->ins = hio_read16b(f);
-	mod->smp = hio_read16b(f);
+	/* Sanity check */
+	if (mod->ins != 0) {
+		return -1;
+	}
+ 
+	val = hio_read16b(f);
+	if (val < 0 || val > 255) {
+		D_(D_CRIT "Invalid number of instruments: %d", val);
+		goto err;
+	}
+	mod->ins = val;
+
+	val = hio_read16b(f);
+	if (val < 0) {
+		D_(D_CRIT "Invalid number of samples: %d", val);
+		goto err2;
+	}
+	mod->smp = val;
+
 	hio_read16b(f);			/* Songs */
-	mod->pat = hio_read16b(f);
-	mod->chn = hio_read16b(f);
+
+	val = hio_read16b(f);
+	if (val < 0 || val > 256) {
+		D_(D_CRIT "Invalid number of patterns: %d", val);
+		goto err3;
+	}
+	mod->pat = val;
+
+	val = hio_read16b(f);
+	if (val < 0 || val > XMP_MAX_CHANNELS) {
+		D_(D_CRIT "Invalid number of channels: %d", val);
+		goto err4;
+	}
+	mod->chn = val;
 
 	mod->trk = mod->pat * mod->chn;
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	return 0;
+
+    err4:
+	mod->pat = 0;
+    err3:
+	mod->smp = 0;
+    err2:
+	mod->ins = 0;
+    err:
+	return -1;
 }
 
 static int get_song(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
@@ -79,6 +132,11 @@ static int get_song(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	mod->len = hio_read16b(f);
 	D_(D_INFO "Song length: %d patterns", mod->len);
 
+	/* Sanity check */
+	if (mod->len > 256) {
+		return -1;
+	}
+
 	for (i = 0; i < mod->len; i++)
 		mod->xxo[i] = hio_read16b(f);
 
@@ -96,11 +154,11 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 
 	for (i = 0; i < mod->ins; i++) {
 		mod->xxi[i].nsm = 1;
-		if (subinstrument_alloc(mod, i, 1) < 0)
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 			return -1;
 
 		hio_read(buffer, 30, 1, f);
-		instrument_name(mod, i, buffer, 30);
+		libxmp_instrument_name(mod, i, buffer, 30);
 		snum = hio_read16b(f);
 		if (snum == 0 || snum > mod->smp)
 			continue;
@@ -117,7 +175,7 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 		mod->xxs[snum].flg = flags & 0x03 ? XMP_SAMPLE_LOOP : 0;
 		mod->xxs[snum].flg |= flags & 0x02 ? XMP_SAMPLE_LOOP_BIDIR : 0;
 
-		c2spd_to_note(c2spd, &mod->xxi[i].sub[0].xpo, &mod->xxi[i].sub[0].fin);
+		libxmp_c2spd_to_note(c2spd, &mod->xxi[i].sub[0].xpo, &mod->xxi[i].sub[0].fin);
 
 		D_(D_INFO "[%2X] %-30.30s #%02X V%02x P%02x %5d",
 			i, mod->xxi[i].name, snum,
@@ -134,7 +192,7 @@ static int get_patt(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	struct xmp_event *event, dummy;
 	uint8 x;
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	D_(D_INFO "Stored patterns: %d ", mod->pat);
@@ -145,14 +203,14 @@ static int get_patt(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	 */
 
 	for (i = 0; i < mod->pat; i++) {
-		if (pattern_tracks_alloc(mod, i, hio_read16b(f)) < 0)
+		if (libxmp_alloc_pattern_tracks(mod, i, hio_read16b(f)) < 0)
 			return -1;
 
 		sz = hio_read32b(f);
 		//printf("rows = %d, size = %d\n", mod->xxp[i]->rows, sz);
 
 		r = 0;
-		c = -1;
+		/*c = -1;*/
 
 		while (sz > 0) {
 			//printf("  offset=%x,  sz = %d, ", hio_tell(f), sz);
@@ -162,7 +220,6 @@ static int get_patt(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 
 			if (c == 0) {
 				r++;
-				c = -1;
 				continue;
 			}
 			c--;
@@ -171,10 +228,13 @@ static int get_patt(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 			if (--sz <= 0) break;
 			//printf("    n = %d\n", n);
 
-			if (c >= mod->chn || r >= mod->xxp[i]->rows)
+			if (c >= mod->chn || r >= mod->xxp[i]->rows) {
 				event = &dummy;
-			else
+			} else {
 				event = &EVENT(i, c, r);
+			}
+
+			memset(event, 0, sizeof (struct xmp_event));
 
 			if (n & 0x01) {
 				x = hio_read8(f);
@@ -240,7 +300,7 @@ static int get_smpl(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 			continue;
 		}
 		
-		if (load_sample(m, f, SAMPLE_FLAG_BIGEND, &mod->xxs[i], NULL) < 0)
+		if (libxmp_load_sample(m, f, SAMPLE_FLAG_BIGEND, &mod->xxs[i], NULL) < 0)
 			return -1;
 
 		if (mod->xxs[i].len == 0)
@@ -305,17 +365,19 @@ static int dbm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	hio_seek(f, 10, SEEK_CUR);
 	hio_read(name, 1, 44, f);
 
-	handle = iff_new();
+	handle = libxmp_iff_new();
 	if (handle == NULL)
 		return -1;
 
+	m->c4rate = C4_NTSC_RATE;
+
 	/* IFF chunk IDs */
-	ret = iff_register(handle, "INFO", get_info);
-	ret |= iff_register(handle, "SONG", get_song);
-	ret |= iff_register(handle, "INST", get_inst);
-	ret |= iff_register(handle, "PATT", get_patt);
-	ret |= iff_register(handle, "SMPL", get_smpl);
-	ret |= iff_register(handle, "VENV", get_venv);
+	ret = libxmp_iff_register(handle, "INFO", get_info);
+	ret |= libxmp_iff_register(handle, "SONG", get_song);
+	ret |= libxmp_iff_register(handle, "INST", get_inst);
+	ret |= libxmp_iff_register(handle, "PATT", get_patt);
+	ret |= libxmp_iff_register(handle, "SMPL", get_smpl);
+	ret |= libxmp_iff_register(handle, "VENV", get_venv);
 
 	if (ret != 0)
 		return -1;
@@ -323,15 +385,16 @@ static int dbm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	strncpy(mod->name, name, XMP_NAME_SIZE);
 	snprintf(mod->type, XMP_NAME_SIZE, "DigiBooster Pro %d.%02x DBM0",
 					version >> 8, version & 0xff);
+
 	MODULE_INFO();
 
 	/* Load IFF chunks */
-	if (iff_load(handle, m, f, &data) < 0) {
-		iff_release(handle);
+	if (libxmp_iff_load(handle, m, f, &data) < 0) {
+		libxmp_iff_release(handle);
 		return -1;
 	}
 
-	iff_release(handle);
+	libxmp_iff_release(handle);
 
 	for (i = 0; i < mod->chn; i++)
 		mod->xxc[i].pan = 0x80;

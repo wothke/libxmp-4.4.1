@@ -1,13 +1,25 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
-#include <sys/types.h>
-#include <sys/stat.h>
 #include "loader.h"
 
 #define MAGIC_Funk	MAGIC4('F','u','n','k')
@@ -16,7 +28,7 @@
 static int fnk_test (HIO_HANDLE *, char *, const int);
 static int fnk_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader fnk_loader = {
+const struct format_loader libxmp_loader_fnk = {
     "Funktracker",
     fnk_test,
     fnk_load
@@ -26,7 +38,6 @@ static int fnk_test(HIO_HANDLE *f, char *t, const int start)
 {
     uint8 a, b;
     int size;
-    struct stat st;
 
     if (hio_read32b(f) != MAGIC_Funk)
 	return -1;
@@ -46,11 +57,10 @@ static int fnk_test(HIO_HANDLE *f, char *t, const int start)
     if (size < 1024)
 	return -1;
 
-    hio_stat(f, &st);
-    if (size != st.st_size)
+    if (hio_size(f) != size)
         return -1;
 
-    read_title(f, t, 0);
+    libxmp_read_title(f, t, 0);
 
     return 0;
 }
@@ -98,6 +108,12 @@ static int fnk_load(struct module_data *m, HIO_HANDLE *f, const int start)
     hio_read(&ffh.order, 256, 1, f);
     hio_read(&ffh.pbrk, 128, 1, f);
 
+    for (i = 0; i < 128; i++) {
+        if (ffh.pbrk[i] >= 64) {
+            return -1;
+        }
+    }
+
     for (i = 0; i < 64; i++) {
 	hio_read(&ffh.fih[i].name, 19, 1, f);
 	ffh.fih[i].loop_start = hio_read32l(f);
@@ -138,12 +154,12 @@ static int fnk_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	else
 	    mod->bpm += (ffh.info[3] >> 1) & 0x3f;
 
-	set_type(m, "FunktrackerGOLD");
+	libxmp_set_type(m, "FunktrackerGOLD");
     } else if (ffh.fmt[0] == 'F' && (ffh.fmt[1] == 'v' || ffh.fmt[1] == 'k')) {
-	set_type(m, "Funktracker");
+	libxmp_set_type(m, "Funktracker");
     } else {
 	mod->chn = 8;
-	set_type(m, "Funktracker DOS32");
+	libxmp_set_type(m, "Funktracker DOS32");
     }
 
     if (mod->chn == 0) {
@@ -155,18 +171,18 @@ static int fnk_load(struct module_data *m, HIO_HANDLE *f, const int start)
     mod->bpm = 4 * mod->bpm / 5;
     mod->trk = mod->chn * mod->pat;
 
-    /* FNK allows mode per instrument but we don't, so use linear like 669 */
-    m->quirk |= QUIRK_LINEAR;
+    /* FNK allows mode per instrument but we don't, so use linear for all */
+    m->period_type = PERIOD_LINEAR;
 
     MODULE_INFO();
     /* D_(D_INFO "Creation date: %02d/%02d/%04d", day, month, year); */
 
-    if (instrument_init(mod) < 0)
+    if (libxmp_init_instrument(m) < 0)
 	return -1;
 
     /* Convert instruments */
     for (i = 0; i < mod->ins; i++) {
-	if (subinstrument_alloc(mod, i, 1) < 0)
+	if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 	    return -1;
 
 	mod->xxs[i].len = ffh.fih[i].length;
@@ -182,7 +198,7 @@ static int fnk_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	if (mod->xxs[i].len > 0)
 	     mod->xxi[i].nsm = 1;
 
-	instrument_name(mod, i, ffh.fih[i].name, 19);
+	libxmp_instrument_name(mod, i, ffh.fih[i].name, 19);
 
 	D_(D_INFO "[%2X] %-20.20s %04x %04x %04x %c V%02x P%02x", i,
 		mod->xxi[i].name,
@@ -191,14 +207,14 @@ static int fnk_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		mod->xxi[i].sub[0].vol, mod->xxi[i].sub[0].pan);
     }
 
-    if (pattern_init(mod) < 0)
+    if (libxmp_init_pattern(mod) < 0)
 	return -1;
 
     /* Read and convert patterns */
     D_(D_INFO "Stored patterns: %d", mod->pat);
 
     for (i = 0; i < mod->pat; i++) {
-	if (pattern_tracks_alloc(mod, i, 64) < 0)
+	if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 	    return -1;
 
 	EVENT(i, 1, ffh.pbrk[i]).f2t = FX_BREAK;
@@ -290,7 +306,7 @@ static int fnk_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	if (mod->xxs[i].len <= 2)
 	    continue;
 
-	if (load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
+	if (libxmp_load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
 	    return -1;
     }
 

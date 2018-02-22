@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "common.h"
+#include "depacker.h"
 #include "crc32.h"
 
 #if 0
@@ -142,7 +143,8 @@ struct LZXDecrData {
     uint8 literal_len[768];
     uint16 literal_table[5120];
 
-    uint8 read_buffer[16384];	/* have a reasonable sized read buffer */
+    /* Was 16384, coverity scan reported overrun */
+    uint8 read_buffer[16385];	/* have a reasonable sized read buffer */
     uint8 buffer[258 + 65536 + 258];	/* allow overrun for speed */
 };
 
@@ -476,6 +478,7 @@ static int read_literal_table(struct LZXDecrData *decr)
     uint32 symbol, pos, count, fix, max_symbol;
     uint8 *src;
     int abort = 0;
+    int x;
 
     control = decr->control;
     shift = decr->shift;
@@ -652,7 +655,18 @@ static int read_literal_table(struct LZXDecrData *decr)
 			control += *src++ << (8 + shift);
 			control += *src++ << shift;
 		    }
-		    symbol = table_four[decr->literal_len[pos] + 17 - symbol];
+
+                    /* Sanity check */
+                    if (pos >= 768)
+                        return -1;
+
+                    x = decr->literal_len[pos] + 17 - symbol;
+
+                    /* Sanity check */
+                    if (x >= 34)
+                        return -1;
+
+		    symbol = table_four[x];
 
 		    while (pos < max_symbol && count--)
 			decr->literal_len[pos++] = symbol;
@@ -821,7 +835,7 @@ static int extract_normal(FILE * in_file, struct LZXDecrData *decr)
 	/*printf("Extracting \"%s\"...", node->filename);
 	   fflush(stdout); */
 
-	if (exclude_match(node->filename)) {
+	if (libxmp_exclude_match(node->filename)) {
 	    out_file = NULL;
 	} else {
 	    out_file = decr->outfile;
@@ -899,7 +913,7 @@ static int extract_normal(FILE * in_file, struct LZXDecrData *decr)
 	    if (count > decr->unpack_size)
 		count = decr->unpack_size;	/* take only what we need */
 
-	    decr->sum = crc32_A1(pos, count, decr->sum);
+	    decr->sum = libxmp_crc32_A1(pos, count, decr->sum);
 
 	    if (out_file) {	/* Write the data to the file */
 		abort = 1;
@@ -965,7 +979,7 @@ static int extract_archive(FILE * in_file, struct LZXDecrData *decr)
 
 	/* Must set the field to 0 before calculating the crc */
 	memset(decr->archive_header + 26, 0, 4);
-	decr->sum = crc32_A1(decr->archive_header, 31, decr->sum);
+	decr->sum = libxmp_crc32_A1(decr->archive_header, 31, decr->sum);
 	temp = decr->archive_header[30];	/* filename length */
 	actual = fread(decr->header_filename, 1, temp, in_file);
 
@@ -980,7 +994,7 @@ static int extract_archive(FILE * in_file, struct LZXDecrData *decr)
 	}
 
 	decr->header_filename[temp] = 0;
-	decr->sum = crc32_A1(decr->header_filename, temp, decr->sum);
+	decr->sum = libxmp_crc32_A1(decr->header_filename, temp, decr->sum);
 	temp = decr->archive_header[14];	/* comment length */
 	actual = fread(decr->header_comment, 1, temp, in_file);
 
@@ -995,7 +1009,7 @@ static int extract_archive(FILE * in_file, struct LZXDecrData *decr)
 	}
 
 	decr->header_comment[temp] = 0;
-	decr->sum = crc32_A1(decr->header_comment, temp, decr->sum);
+	decr->sum = libxmp_crc32_A1(decr->header_comment, temp, decr->sum);
 
 	if (decr->sum != decr->crc) {
 	    /* fprintf(stderr, "CRC: Archive_Header\n"); */
@@ -1044,9 +1058,13 @@ static int extract_archive(FILE * in_file, struct LZXDecrData *decr)
 	    break;
 	}
 
+#if 0
 	if (abort)
 	    break;		/* a read error occured */
 
+	/* CID 129002 (#1 of 1): Logically dead code (DEADCODE)
+	 * dead_error_begin: Execution cannot reach this statement: 
+	 */
 	temp_node = decr->filename_list;	/* free the list now */
 	while ((node = temp_node)) {
 	    temp_node = node->next;
@@ -1059,6 +1077,7 @@ static int extract_archive(FILE * in_file, struct LZXDecrData *decr)
 	    /* perror("FSeek(Data)"); */
 	    break;
 	}
+#endif
 
     } while (!abort);
 
@@ -1072,24 +1091,40 @@ static int extract_archive(FILE * in_file, struct LZXDecrData *decr)
     return result;
 }
 
-int decrunch_lzx(FILE *f, FILE *fo)
+static int test_lzx(unsigned char *b)
+{
+	return memcmp(b, "LZX", 3) == 0;
+}
+
+static int decrunch_lzx(FILE *f, FILE *fo)
 {
 	struct LZXDecrData *decr;
 
 	if (fo == NULL)
-		return -1;
+		goto err;
 
-	decr = malloc(sizeof(struct LZXDecrData));
+	decr = calloc(1, sizeof(struct LZXDecrData));
 	if (decr == NULL)
-		return -1;
+		goto err;
 
-	fseek(f, 10, SEEK_CUR);	/* skip header */
+	if (fseek(f, 10, SEEK_CUR) < 0)		/* skip header */
+		goto err2;
 
-	crc32_init_A();
+	libxmp_crc32_init_A();
 	decr->outfile = fo;
 	extract_archive(f, decr);
 
 	free(decr);
 
 	return 0;
+
+    err2:
+	free(decr);
+    err:
+	return -1;
 }
+
+struct depacker libxmp_depacker_lzx = {
+	test_lzx,
+	decrunch_lzx
+};

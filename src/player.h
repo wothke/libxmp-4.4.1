@@ -2,7 +2,6 @@
 #define LIBXMP_PLAYER_H
 
 #include "lfo.h"
-#include "envelope.h"
 
 /* Quirk control */
 #define HAS_QUIRK(x)	(m->quirk & (x))
@@ -51,12 +50,23 @@ struct retrig_control {
 #define PANBRELLO	(1 << 19)
 #define GVOL_SLIDE	(1 << 20)
 #define TEMPO_SLIDE	(1 << 21)
+#define VENV_PAUSE	(1 << 22)
+#define PENV_PAUSE	(1 << 23)
+#define FENV_PAUSE	(1 << 24)
+#define FINE_VOLS_2	(1 << 25)
+#define KEY_OFF		(1 << 26)	/* for IT release on envloop end */
+#define TREMOR		(1 << 27)	/* for XM tremor */
 
 #define NOTE_FADEOUT	(1 << 0)
 #define NOTE_RELEASE	(1 << 1)
 #define NOTE_END	(1 << 2)
 #define NOTE_CUT	(1 << 3)
 #define NOTE_ENV_END	(1 << 4)
+#define NOTE_SAMPLE_END	(1 << 5)
+#define NOTE_SET	(1 << 6)	/* for IT portamento after keyoff */
+#define NOTE_SUSEXIT	(1 << 7)	/* for delayed note release */
+#define NOTE_KEY_CUT	(1 << 8)	/* note cut with XMP_KEY_CUT event */
+#define NOTE_GLISSANDO	(1 << 9)
 
 #define IS_VALID_INSTRUMENT(x) ((uint32)(x) < mod->ins && mod->xxi[(x)].nsm > 0)
 #define IS_VALID_INSTRUMENT_OR_SFX(x) (((uint32)(x) < mod->ins && mod->xxi[(x)].nsm > 0) || (smix->ins > 0 && (uint32)(x) < mod->ins + smix->ins))
@@ -77,22 +87,27 @@ struct channel_data {
 	int finetune;		/* Guess what */
 	int ins;		/* Instrument number */
 	int old_ins;		/* Last instruemnt */
-	int old_insvol;		/* Last instrument that did set a note */
 	int smp;		/* Sample number */
 	int mastervol;		/* Master vol -- for IT track vol effect */
 	int delay;		/* Note delay in frames */
 	int keyoff;		/* Key off counter */
 	int fadeout;		/* Current fadeout (release) value */
-	int gliss;		/* Glissando active */
+	int ins_fade;		/* Instrument fadeout value */
 	int volume;		/* Current volume */
 	int gvl;		/* Global volume for instrument for IT */
-	int offset;		/* Sample offset memory */
-	int offset_val;		/* Sample offset */
 
-	uint16 v_idx;		/* Volume envelope index */
-	uint16 p_idx;		/* Pan envelope index */
-	uint16 f_idx;		/* Freq envelope index */
+	int rvv;		/* Random volume variation */
+	int rpv;		/* Random pan variation */
 
+	uint8 split;		/* Split channel */
+	uint8 pair;		/* Split channel pair */
+
+	int v_idx;		/* Volume envelope index */
+	int p_idx;		/* Pan envelope index */
+	int f_idx;		/* Freq envelope index */
+
+	int key_porta;		/* Key number for portamento target
+				 * -- needed to handle IT portamento xpo */
 	struct {
 		struct lfo lfo;
 		int memory;
@@ -123,15 +138,21 @@ struct channel_data {
 	} insvib;
 
 	struct {
+		int val;
+		int val2;	/* For fx9 bug emulation */
+		int memory;
+	} offset;
+
+	struct {
 		int val;	/* Retrig value */
 		int count;	/* Retrig counter */
 		int type;	/* Retrig type */
 	} retrig;
 
 	struct {
-		int val;	/* Tremor value */
-		int count;	/* Tremor counter */
-		int memory;	/* Tremor memory */
+		uint8 up,down;	/* Tremor value */
+		uint8 count;	/* Tremor counter */
+		uint8 memory;	/* Tremor memory */
 	} tremor;
 
 	struct {
@@ -139,6 +160,10 @@ struct channel_data {
 		int fslide;	/* Fine volume slide value */
 		int slide2;	/* Volume slide value */
 		int memory;	/* Volume slide effect memory */
+#ifndef LIBXMP_CORE_DISABLE_IT
+		int fslide2;
+		int memory2;	/* Volume slide effect memory */
+#endif
 	} vol;
 
 	struct {
@@ -181,6 +206,7 @@ struct channel_data {
 		int slide;	/* Pan slide value */
 		int fslide;	/* Pan fine slide value */
 		int memory;	/* Pan slide effect memory */
+		int surround;	/* Surround channel flag */
 	} pan;	
 
 	struct {
@@ -197,6 +223,7 @@ struct channel_data {
 	struct {
 		int cutoff;	/* IT filter cutoff frequency */
 		int resonance;	/* IT filter resonance */
+		int envelope;	/* IT filter envelope */
 	} filter;
 
 #endif
@@ -223,8 +250,9 @@ struct channel_data {
 };
 
 
-void process_fx(struct context_data *, struct channel_data *, int, uint8, uint8, uint8, int);
-void filter_setup(int, int, int, int*, int*, int *);
-int read_event(struct context_data *, struct xmp_event *, int);
+void	libxmp_process_fx	(struct context_data *, struct channel_data *,
+				 int, struct xmp_event *, int);
+void	libxmp_filter_setup	(int, int, int, int*, int*, int *);
+int	libxmp_read_event	(struct context_data *, struct xmp_event *, int);
 
 #endif /* LIBXMP_PLAYER_H */

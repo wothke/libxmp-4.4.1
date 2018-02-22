@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 #include "loader.h"
@@ -12,7 +26,7 @@
 static int amd_test(HIO_HANDLE *, char *, const int);
 static int amd_load(struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader amd_loader = {
+const struct format_loader libxmp_loader_amd = {
 	"Amusic Adlib Tracker",
 	amd_test,
 	amd_load
@@ -30,7 +44,7 @@ static int amd_test(HIO_HANDLE *f, char *t, const int start)
 		return -1;
 
 	hio_seek(f, start + 0, SEEK_SET);
-	read_title(f, t, 24);
+	libxmp_read_title(f, t, 24);
 
 	return 0;
 }
@@ -104,11 +118,11 @@ static int load_unpacked_patterns(struct module_data *m, HIO_HANDLE *f)
 	struct xmp_event *event;
 
 	mod->trk = mod->pat * 9;
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	for (i = 0; i < mod->pat; i++) {
-		if (pattern_tracks_alloc(mod, i, 64) < 0)
+		if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 			return -1;
 
 		for (j = 0; j < (64 * mod->chn); j++) {
@@ -140,7 +154,7 @@ static int load_packed_patterns(struct module_data *m, HIO_HANDLE *f)
 		return -1;
 
 	for (i = 0; i < mod->pat; i++) {
-		if (pattern_alloc(mod, i) < 0)
+		if (libxmp_alloc_pattern(mod, i) < 0)
 			return -1;
 
 		for (j = 0; j < 9; j++) {
@@ -153,9 +167,20 @@ static int load_packed_patterns(struct module_data *m, HIO_HANDLE *f)
 	}
 	mod->trk++;
 
-	stored_tracks = hio_read16l(f);
+	/* Sanity check */
+	if (mod->trk > mod->pat * 9) {
+		return -1;
+	}
 
-	D_(D_INFO "Stored tracks: %d", w);
+	stored_tracks = hio_read16l(f);
+	
+	/* Sanity check */
+	if (hio_error(f) || stored_tracks <= 0) {
+		return -1;
+	}
+
+	D_(D_INFO "Tracks: %d", mod->trk);
+	D_(D_INFO "Stored tracks: %d", stored_tracks);
 
 	mod->xxt = calloc(sizeof(struct xmp_track *), mod->trk);
 	if (mod->xxt == NULL)
@@ -163,14 +188,27 @@ static int load_packed_patterns(struct module_data *m, HIO_HANDLE *f)
 
 	for (i = 0; i < stored_tracks; i++) {
 		w = hio_read16l(f);
-		if (track_alloc(mod, w, 64) < 0)
+		if (hio_error(f)) {
 			return -1;
+		}
+
+		/* Sanity check */
+		if (w >= mod->trk || mod->xxt[w] != NULL) {
+			return -1;
+		}
+
+		if (libxmp_alloc_track(mod, w, 64) < 0) {
+			return -1;
+		}
 
 		for (r = 0; r < 64; r++) {
 			event = &mod->xxt[w]->event[r];
 
 			/* check event packing */
 			b = hio_read8(f);	/* Effect parameter */
+			if (hio_error(f)) {
+				return -1;
+			}
 			if (b & 0x80) {
 				r += (b & 0x7f) - 1;
 				continue;
@@ -202,6 +240,9 @@ static int amd_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		hio_read(&afh.ins[i].reg, 11, 1, f);
 	}
 	afh.len = hio_read8(f);
+	if (afh.len >= 128) {
+		return -1;
+	}
 	afh.pat = hio_read8(f);
 	hio_read(&afh.order, 128, 1, f);
 	hio_read(&afh.magic, 9, 1, f);
@@ -219,21 +260,21 @@ static int amd_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	mod->smp = mod->ins;
 	memcpy(mod->xxo, afh.order, mod->len);
 
-	set_type(m, "Amusic Adlib Tracker");
+	libxmp_set_type(m, "Amusic Adlib Tracker");
 	strncpy(mod->name, (char *)afh.name, 24);
 
 	MODULE_INFO();
 	D_(D_INFO "Instruments: %d", mod->ins);
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	/* Load instruments */
 	for (i = 0; i < mod->ins; i++) {
-		if (subinstrument_alloc(mod, i, 1) < 0)
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 			return -1;
 
-		instrument_name(mod, i, afh.ins[i].name, 23);
+		libxmp_instrument_name(mod, i, afh.ins[i].name, 23);
 
 		mod->xxi[i].sub[0].vol = 0x40;
 		mod->xxi[i].sub[0].pan = 0x80;
@@ -245,7 +286,7 @@ static int amd_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 		D_(D_INFO "\n[%2X] %-23.23s", i, mod->xxi[i].name);
 
-		if (load_sample(m, f, SAMPLE_FLAG_ADLIB, &mod->xxs[i],regs) < 0)
+		if (libxmp_load_sample(m, f, SAMPLE_FLAG_ADLIB, &mod->xxs[i],regs) < 0)
 			return -1;
 	}
 

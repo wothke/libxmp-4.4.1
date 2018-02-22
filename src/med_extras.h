@@ -33,6 +33,10 @@ struct med_channel_extras {
 	int volume;		/* MED synth note volume */
 	int hold;		/* MED note on hold flag */
 	int hold_count;		/* MED note on hold frame counter */
+	int env_wav;		/* MED synth volume envelope waveform */
+	int env_idx;		/* MED synth volume envelope index */
+#define MED_SYNTH_ENV_LOOP (1 << 0)
+	int flags;		/* flags */
 };
 
 struct med_module_extras {
@@ -56,16 +60,16 @@ struct med_module_extras {
 	(MED_MODULE_EXTRAS(x) != NULL && \
 	 MED_MODULE_EXTRAS(x)->magic == MED_EXTRAS_MAGIC)
 
-int med_change_period(struct context_data *, struct channel_data *);
-int med_linear_bend(struct context_data *, struct channel_data *);
-int med_get_vibrato(struct channel_data *);
-void med_play_extras(struct context_data *, struct channel_data *, int, int);
-int med_new_instrument_extras(struct xmp_instrument *);
-int med_new_channel_extras(struct channel_data *);
-void med_reset_channel_extras(struct channel_data *);
-void med_release_channel_extras(struct channel_data *);
-int med_new_module_extras(struct module_data *);
-void med_release_module_extras(struct module_data *);
-void med_extras_process_fx(struct context_data *, struct channel_data *, int, uint8, uint8, uint8, int);
+int  libxmp_med_change_period(struct context_data *, struct channel_data *);
+int  libxmp_med_linear_bend(struct context_data *, struct channel_data *);
+int  libxmp_med_get_vibrato(struct channel_data *);
+void libxmp_med_play_extras(struct context_data *, struct channel_data *, int);
+int  libxmp_med_new_instrument_extras(struct xmp_instrument *);
+int  libxmp_med_new_channel_extras(struct channel_data *);
+void libxmp_med_reset_channel_extras(struct channel_data *);
+void libxmp_med_release_channel_extras(struct channel_data *);
+int  libxmp_med_new_module_extras(struct module_data *);
+void libxmp_med_release_module_extras(struct module_data *);
+void libxmp_med_extras_process_fx(struct context_data *, struct channel_data *, int, uint8, uint8, uint8, int);
 
 #endif

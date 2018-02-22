@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -27,7 +27,7 @@
 static int flt_test(HIO_HANDLE *, char *, const int);
 static int flt_load(struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader flt_loader = {
+const struct format_loader libxmp_loader_flt = {
 	"Startrekker",
 	flt_test,
 	flt_load
@@ -49,7 +49,7 @@ static int flt_test(HIO_HANDLE * f, char *t, const int start)
 		return -1;
 
 	hio_seek(f, start + 0, SEEK_SET);
-	read_title(f, t, 20);
+	libxmp_read_title(f, t, 20);
 
 	return 0;
 }
@@ -93,28 +93,24 @@ struct am_instrument {
 	int16 fq;		/* base frequency */
 };
 
-static int is_am_instrument(FILE * nt, int i)
+static int is_am_instrument(HIO_HANDLE *nt, int i)
 {
 	char buf[2];
 	int16 wf;
 
-	fseek(nt, 144 + i * 120, SEEK_SET);
-
-	if (fread(buf, 1, 2, nt) < 2)
-		return 0;
-
+	hio_seek(nt, 144 + i * 120, SEEK_SET);
+	hio_read(buf, 1, 2, nt);
 	if (memcmp(buf, "AM", 2))
 		return 0;
-
-	fseek(nt, 24, SEEK_CUR);
-	wf = read16b(nt);
-	if (wf < 0 || wf > 3)
+	hio_seek(nt, 24, SEEK_CUR);
+	wf = hio_read16b(nt);
+	if (hio_error(nt) || wf < 0 || wf > 3)
 		return 0;
 
 	return 1;
 }
 
-static int read_am_instrument(struct module_data *m, FILE * nt, int i)
+static int read_am_instrument(struct module_data *m, HIO_HANDLE *nt, int i)
 {
 	struct xmp_module *mod = &m->mod;
 	struct xmp_instrument *xxi = &mod->xxi[i];
@@ -126,22 +122,26 @@ static int read_am_instrument(struct module_data *m, FILE * nt, int i)
 	int a, b;
 	int8 am_noise[1024];
 
-	fseek(nt, 144 + i * 120 + 2 + 4, SEEK_SET);
-	am.l0 = read16b(nt);
-	am.a1l = read16b(nt);
-	am.a1s = read16b(nt);
-	am.a2l = read16b(nt);
-	am.a2s = read16b(nt);
-	am.sl = read16b(nt);
-	am.ds = read16b(nt);
-	am.st = read16b(nt);
-	read16b(nt);
-	am.rs = read16b(nt);
-	am.wf = read16b(nt);
-	am.p_fall = -(int16) read16b(nt);
-	am.v_amp = read16b(nt);
-	am.v_spd = read16b(nt);
-	am.fq = read16b(nt);
+	hio_seek(nt, 144 + i * 120 + 2 + 4, SEEK_SET);
+	am.l0  = hio_read16b(nt);
+	am.a1l = hio_read16b(nt);
+	am.a1s = hio_read16b(nt);
+	am.a2l = hio_read16b(nt);
+	am.a2s = hio_read16b(nt);
+	am.sl  = hio_read16b(nt);
+	am.ds  = hio_read16b(nt);
+	am.st  = hio_read16b(nt);
+	hio_read16b(nt);
+	am.rs  = hio_read16b(nt);
+	am.wf  = hio_read16b(nt);
+	am.p_fall = -(int16) hio_read16b(nt);
+	am.v_amp = hio_read16b(nt);
+	am.v_spd = hio_read16b(nt);
+	am.fq  = hio_read16b(nt);
+
+	if (hio_error(nt)) {
+		return -1;
+	}
 
 #if 0
 	printf
@@ -173,7 +173,7 @@ static int read_am_instrument(struct module_data *m, FILE * nt, int i)
 	xxi->nsm = 1;
 	xxi->sub[0].xpo = -12 * am.fq;
 	xxi->sub[0].vwf = 0;
-	xxi->sub[0].vde = am.v_amp;
+	xxi->sub[0].vde = am.v_amp << 2;
 	xxi->sub[0].vra = am.v_spd;
 
 	/*
@@ -281,7 +281,7 @@ static int read_am_instrument(struct module_data *m, FILE * nt, int i)
 		freq_env->data[3] = 10 * (am.p_fall < 0 ? -256 : 256);
 	}
 
-	if (load_sample(m, NULL, SAMPLE_FLAG_NOLOAD, xxs, wave))
+	if (libxmp_load_sample(m, NULL, SAMPLE_FLAG_NOLOAD, xxs, wave))
 		return -1;
 
 	return 0;
@@ -297,7 +297,7 @@ static int flt_load(struct module_data *m, HIO_HANDLE * f, const int start)
 	char *tracker;
 	char filename[1024];
 	char buf[16];
-	FILE *nt;
+	HIO_HANDLE *nt;
 	int am_synth;
 
 	LOAD_INIT();
@@ -305,15 +305,15 @@ static int flt_load(struct module_data *m, HIO_HANDLE * f, const int start)
 	/* See if we have the synth parameters file */
 	am_synth = 0;
 	snprintf(filename, 1024, "%s%s.NT", m->dirname, m->basename);
-	if ((nt = fopen(filename, "rb")) == NULL) {
+	if ((nt = hio_open(filename, "rb")) == NULL) {
 		snprintf(filename, 1024, "%s%s.nt", m->dirname, m->basename);
-		if ((nt = fopen(filename, "rb")) == NULL) {
+		if ((nt = hio_open(filename, "rb")) == NULL) {
 			snprintf(filename, 1024, "%s%s.AS", m->dirname,
 				 m->basename);
-			if ((nt = fopen(filename, "rb")) == NULL) {
+			if ((nt = hio_open(filename, "rb")) == NULL) {
 				snprintf(filename, 1024, "%s%s.as", m->dirname,
 					 m->basename);
-				nt = fopen(filename, "rb");
+				nt = hio_open(filename, "rb");
 			}
 		}
 	}
@@ -321,7 +321,9 @@ static int flt_load(struct module_data *m, HIO_HANDLE * f, const int start)
 	tracker = "Startrekker";
 
 	if (nt) {
-		fread(buf, 1, 16, nt);
+		if (hio_read(buf, 1, 16, nt) != 16) {
+			goto err;
+		}
 		if (memcmp(buf, "ST1.2 ModuleINFO", 16) == 0) {
 			am_synth = 1;
 			tracker = "Startrekker 1.2";
@@ -348,10 +350,11 @@ static int flt_load(struct module_data *m, HIO_HANDLE * f, const int start)
 	hio_read(&mh.order, 128, 1, f);
 	hio_read(&mh.magic, 4, 1, f);
 
-	if (mh.magic[3] == '4')
+	if (mh.magic[3] == '4') {
 		mod->chn = 4;
-	else
+	} else {
 		mod->chn = 8;
+	}
 
 	mod->ins = 31;
 	mod->smp = mod->ins;
@@ -371,18 +374,18 @@ static int flt_load(struct module_data *m, HIO_HANDLE * f, const int start)
 	mod->trk = mod->chn * mod->pat;
 
 	strncpy(mod->name, (char *)mh.name, 20);
-	set_type(m, "%s %4.4s", tracker, mh.magic);
+	libxmp_set_type(m, "%s %4.4s", tracker, mh.magic);
 	MODULE_INFO();
 
-	if (instrument_init(mod) < 0)
-		return -1;
+	if (libxmp_init_instrument(m) < 0)
+		goto err;
 
 	for (i = 0; i < mod->ins; i++) {
 		struct xmp_instrument *xxi = &mod->xxi[i];
 		struct xmp_sample *xxs = &mod->xxs[i];
 		struct xmp_subinstrument *sub;
 
-		if (subinstrument_alloc(mod, i, 1) < 0)
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 			goto err;
 
 		sub = &xxi->sub[0];
@@ -400,10 +403,10 @@ static int flt_load(struct module_data *m, HIO_HANDLE * f, const int start)
 		if (xxs->len > 0)
 			xxi->nsm = 1;
 
-		instrument_name(mod, i, mh.ins[i].name, 22);
+		libxmp_instrument_name(mod, i, mh.ins[i].name, 22);
 	}
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		goto err;
 
 	/* Load and convert patterns */
@@ -422,19 +425,19 @@ static int flt_load(struct module_data *m, HIO_HANDLE * f, const int start)
 	 *  the normal portamento command, that would be hard to patch).
 	 */
 	for (i = 0; i < mod->pat; i++) {
-		if (pattern_tracks_alloc(mod, i, 64) < 0)
+		if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 			goto err;
 
 		for (j = 0; j < (64 * 4); j++) {
 			event = &EVENT(i, j % 4, j / 4);
 			hio_read(mod_event, 1, 4, f);
-			decode_noisetracker_event(event, mod_event);
+			libxmp_decode_noisetracker_event(event, mod_event);
 		}
 		if (mod->chn > 4) {
 			for (j = 0; j < (64 * 4); j++) {
 				event = &EVENT(i, (j % 4) + 4, j / 4);
 				hio_read(mod_event, 1, 4, f);
-				decode_noisetracker_event(event, mod_event);
+				libxmp_decode_noisetracker_event(event, mod_event);
 
 				/* no macros */
 				if (event->fxt == 0x0e)
@@ -454,26 +457,28 @@ static int flt_load(struct module_data *m, HIO_HANDLE * f, const int start)
 	for (i = 0; i < mod->smp; i++) {
 		if (mod->xxs[i].len == 0) {
 			if (am_synth && is_am_instrument(nt, i)) {
-				if (read_am_instrument(m, nt, i) < 0)
+				if (read_am_instrument(m, nt, i) < 0) {
+					D_(D_CRIT "Missing nt file");
 					goto err;
+				}
 			}
 			continue;
 		}
-		if (load_sample(m, f, SAMPLE_FLAG_FULLREP, &mod->xxs[i], NULL) <
+		if (libxmp_load_sample(m, f, SAMPLE_FLAG_FULLREP, &mod->xxs[i], NULL) <
 		    0) {
 			goto err;
 		}
 	}
 
 	if (nt) {
-		fclose(nt);
+		hio_close(nt);
 	}
 
 	return 0;
 
       err:
 	if (nt) {
-		fclose(nt);
+		hio_close(nt);
 	}
 
 	return -1;

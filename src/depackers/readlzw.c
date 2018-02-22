@@ -68,7 +68,7 @@ static void outputchr(int chr, struct local_data *);
 static int findfirstchr(int code, struct local_data *);
 
 
-static unsigned char *_convert_lzw_dynamic(unsigned char *data_in,
+static unsigned char *convert_lzw_dynamic(unsigned char *data_in,
                                    int max_bits,int use_rle,
                                    unsigned long in_len,
                                    unsigned long orig_len, int q,
@@ -84,7 +84,10 @@ data->quirk = q;
 data->global_use_rle=use_rle;
 data->maxstr=(1<<max_bits);
 
-if((data_out=malloc(orig_len))==NULL) {
+if (data->maxstr > REALMAXSTR)
+  return NULL;
+
+if((data_out=calloc(1, orig_len))==NULL) {
   //fprintf(stderr,"nomarch: out of memory!\n");
   return NULL;
 }
@@ -93,7 +96,7 @@ data->io.data_in_point=data_in; data->io.data_in_max=data_in+in_len;
 data->io.data_out_point=data_out; data->io.data_out_max=data_out+orig_len;
 data->dc_bitbox=data->dc_bitsleft=0;
 data->codeofs=0;
-outputrle(-1,NULL, &data->rd, &data->io);	/* init RLE */
+libxmp_outputrle(-1,NULL, &data->rd, &data->io);	/* init RLE */
 
 data->oldver=0;
 csize=9;		/* initial code size */
@@ -121,7 +124,7 @@ while(1)
   if(!readcode(&newcode,csize,data)) {
 //printf("readcode failed!\n");
     break;
-}
+  }
 //printf("newcode = %x\n", newcode);
 
   if (data->quirk & NOMARCH_QUIRK_END101) {
@@ -211,7 +214,7 @@ if (~data->quirk & NOMARCH_QUIRK_NOCHK) {
 return(data_out);
 }
 
-unsigned char *convert_lzw_dynamic(unsigned char *data_in,
+unsigned char *libxmp_convert_lzw_dynamic(unsigned char *data_in,
                                    int max_bits,int use_rle,
                                    unsigned long in_len,
                                    unsigned long orig_len, int q)
@@ -220,17 +223,32 @@ unsigned char *convert_lzw_dynamic(unsigned char *data_in,
 	unsigned char *d;
 
 	if ((data = malloc(sizeof (struct local_data))) == NULL) {
-		return NULL;
+		goto err;
 	}
 
-	d = _convert_lzw_dynamic(data_in, max_bits, use_rle, in_len,
+	d = convert_lzw_dynamic(data_in, max_bits, use_rle, in_len,
 						orig_len, q, data);
 
+	/* Sanity check */
+	if (d == NULL) {
+		goto err2;
+	}
+	if (d + orig_len != data->io.data_out_point) {
+		free(d);
+		goto err2;
+	}
+
 	free(data);
+
 	return d;
+
+    err2:
+	free(data);
+    err:
+	return NULL;
 }
 
-unsigned char *read_lzw_dynamic(FILE *f, uint8 *buf, int max_bits,int use_rle,
+unsigned char *libxmp_read_lzw_dynamic(FILE *f, uint8 *buf, int max_bits,int use_rle,
 			unsigned long in_len, unsigned long orig_len, int q)
 {
 	uint8 *buf2, *b;
@@ -239,26 +257,41 @@ unsigned char *read_lzw_dynamic(FILE *f, uint8 *buf, int max_bits,int use_rle,
 	struct local_data *data;
 
 	if ((data = malloc(sizeof (struct local_data))) == NULL) {
-		return NULL;
+		goto err;
 	}
 
 	if ((buf2 = malloc(in_len)) == NULL) {
 		//perror("read_lzw_dynamic");
-		return NULL;
+		goto err2;
 	}
 
 	pos = ftell(f);
-	fread(buf2, 1, in_len, f);
-	b = _convert_lzw_dynamic(buf2, max_bits, use_rle, in_len, orig_len, q, data);
+	if (fread(buf2, 1, in_len, f) != in_len) {
+		if (~q & XMP_LZW_QUIRK_DSYM) {
+			goto err3;
+		}
+	}
+	b = convert_lzw_dynamic(buf2, max_bits, use_rle, in_len, orig_len, q, data);
 	memcpy(buf, b, orig_len);
 	size = q & NOMARCH_QUIRK_ALIGN4 ? ALIGN4(data->nomarch_input_size) :
 						data->nomarch_input_size;
-	fseek(f, pos + size, SEEK_SET);
+	if (fseek(f, pos + size, SEEK_SET) < 0) {
+		goto err4;
+	}
 	free(b);
 	free(buf2);
 	free(data);
 
 	return buf;
+
+    err4:
+        free(b);
+    err3:
+        free(buf2);
+    err2:
+	free(data);
+    err:
+        return NULL;
 }
 
 /* uggghhhh, this is agonisingly painful. It turns out that
@@ -437,6 +470,12 @@ while(bitsfilled<numbits)
     data->dc_bitbox&=0xff;
     data->dc_bitbox<<=got;
     bitsfilled+=got;
+    
+    /* Sanity check */
+    if (bitsfilled > numbits) {
+      return 0;
+    }
+
     (*newcode)|=((data->dc_bitbox>>8)<<(numbits-bitsfilled));
     data->dc_bitsleft-=got;
     }
@@ -490,7 +529,7 @@ if(io->data_out_point<io->data_out_max)
 static void outputchr(int chr, struct local_data *data)
 {
 if(data->global_use_rle)
-  outputrle(chr,rawoutput,&data->rd,&data->io);
+  libxmp_outputrle(chr,rawoutput,&data->rd,&data->io);
 else
   rawoutput(chr,&data->io);
 }

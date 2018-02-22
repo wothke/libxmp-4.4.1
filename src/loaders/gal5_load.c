@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -37,7 +37,7 @@
 static int gal5_test(HIO_HANDLE *, char *, const int);
 static int gal5_load(struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader gal5_loader = {
+const struct format_loader libxmp_loader_gal5 = {
 	"Galaxy Music System 5.0 (J2B)",
 	gal5_test,
 	gal5_load
@@ -62,7 +62,7 @@ static int gal5_test(HIO_HANDLE *f, char *t, const int start)
 		return -1;
 
 	hio_read32b(f);		/* skip size */
-	read_title(f, t, 64);
+	libxmp_read_title(f, t, 64);
 
 	return 0;
 }
@@ -75,11 +75,11 @@ static int get_init(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	int flags;
 	
 	hio_read(buf, 1, 64, f);
-	strncpy(mod->name, buf, 64);
-	set_type(m, "Galaxy Music System 5.0");
+	strncpy(mod->name, buf, 63);	/* ensure string terminator */
+	libxmp_set_type(m, "Galaxy Music System 5.0");
 	flags = hio_read8(f);	/* bit 0: Amiga period */
 	if (~flags & 0x01)
-		m->quirk |= QUIRK_LINEAR;
+		m->period_type = PERIOD_LINEAR;
 	mod->chn = hio_read8(f);
 	mod->spd = hio_read8(f);
 	mod->bpm = hio_read8(f);
@@ -146,7 +146,7 @@ static int get_patt(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	
 	rows = hio_read8(f) + 1;
 
-	if (pattern_tracks_alloc(mod, i, rows) < 0)
+	if (libxmp_alloc_pattern_tracks(mod, i, rows) < 0)
 		return -1;
 
 	for (r = 0; r < rows; ) {
@@ -206,8 +206,6 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	i = hio_read8(f);		/* instrument number */
 	
 	hio_read(&mod->xxi[i].name, 1, 28, f);
-	adjust_string((char *)mod->xxi[i].name);
-
 	hio_seek(f, 290, SEEK_CUR);	/* Sample/note map, envelopes */
 	mod->xxi[i].nsm = hio_read16l(f);
 
@@ -216,7 +214,7 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	if (mod->xxi[i].nsm == 0)
 		return 0;
 
-	if (subinstrument_alloc(mod, i, mod->xxi[i].nsm) < 0)
+	if (libxmp_alloc_subinstrument(mod, i, mod->xxi[i].nsm) < 0)
 		return -1;
 
 	/* FIXME: Currently reading only the first sample */
@@ -229,7 +227,6 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	hio_read32b(f);	/* unknown - usually 0x40000000 */
 
 	hio_read(&mod->xxs[i].name, 1, 28, f);
-	adjust_string((char *)mod->xxs[i].name);
 
 	hio_read32b(f);	/* unknown - 0x0000 */
 	hio_read8(f);	/* unknown - 0x00 */
@@ -257,7 +254,7 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 
 	srate = hio_read32l(f);
 	finetune = 0;
-	c2spd_to_note(srate, &mod->xxi[i].sub[0].xpo, &mod->xxi[i].sub[0].fin);
+	libxmp_c2spd_to_note(srate, &mod->xxi[i].sub[0].xpo, &mod->xxi[i].sub[0].fin);
 	mod->xxi[i].sub[0].fin += finetune;
 
 	hio_read32l(f);			/* 0x00000000 */
@@ -273,7 +270,7 @@ static int get_inst(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 		mod->xxi[i].sub[0].vol, flags, srate);
 
 	if (mod->xxs[i].len > 1) {
-		if (load_sample(m, f, has_unsigned_sample ?
+		if (libxmp_load_sample(m, f, has_unsigned_sample ?
 				SAMPLE_FLAG_UNS : 0, &mod->xxs[i], NULL) < 0)
 			return -1;
 	}
@@ -298,40 +295,42 @@ static int gal5_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	mod->smp = mod->ins = 0;
 
-	handle = iff_new();
+	handle = libxmp_iff_new();
 	if (handle == NULL)
 		return -1;
 
+	m->c4rate = C4_NTSC_RATE;
+
 	/* IFF chunk IDs */
-	ret = iff_register(handle, "INIT", get_init);		/* Galaxy 5.0 */
-	ret |= iff_register(handle, "ORDR", get_ordr);
-	ret |= iff_register(handle, "PATT", get_patt_cnt);
-	ret |= iff_register(handle, "INST", get_inst_cnt);
+	ret = libxmp_iff_register(handle, "INIT", get_init);		/* Galaxy 5.0 */
+	ret |= libxmp_iff_register(handle, "ORDR", get_ordr);
+	ret |= libxmp_iff_register(handle, "PATT", get_patt_cnt);
+	ret |= libxmp_iff_register(handle, "INST", get_inst_cnt);
 
 	if (ret != 0)
 		return -1;
 
-	iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
-	iff_set_quirk(handle, IFF_SKIP_EMBEDDED);
-	iff_set_quirk(handle, IFF_CHUNK_ALIGN2);
+	libxmp_iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
+	libxmp_iff_set_quirk(handle, IFF_SKIP_EMBEDDED);
+	libxmp_iff_set_quirk(handle, IFF_CHUNK_ALIGN2);
 
 	/* Load IFF chunks */
-	if (iff_load(handle, m, f, &data) < 0) {
-		iff_release(handle);
+	if (libxmp_iff_load(handle, m, f, &data) < 0) {
+		libxmp_iff_release(handle);
 		return -1;
 	}
 
-	iff_release(handle);
+	libxmp_iff_release(handle);
 
 	mod->trk = mod->pat * mod->chn;
 	mod->smp = mod->ins;
 
 	MODULE_INFO();
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	D_(D_INFO "Stored patterns: %d", mod->pat);
@@ -339,28 +338,37 @@ static int gal5_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	hio_seek(f, start + offset, SEEK_SET);
 
-	handle = iff_new();
+	handle = libxmp_iff_new();
 	if (handle == NULL)
 		return -1;
 
 	/* IFF chunk IDs */
-	ret = iff_register(handle, "PATT", get_patt);
-	ret |= iff_register(handle, "INST", get_inst);
+	ret = libxmp_iff_register(handle, "PATT", get_patt);
+	ret |= libxmp_iff_register(handle, "INST", get_inst);
 
 	if (ret != 0)
 		return -1;
 
-	iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
-	iff_set_quirk(handle, IFF_SKIP_EMBEDDED);
-	iff_set_quirk(handle, IFF_CHUNK_ALIGN2);
+	libxmp_iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
+	libxmp_iff_set_quirk(handle, IFF_SKIP_EMBEDDED);
+	libxmp_iff_set_quirk(handle, IFF_CHUNK_ALIGN2);
 
 	/* Load IFF chunks */
-	if (iff_load(handle, m, f, &data) < 0) {
-		iff_release(handle);
+	if (libxmp_iff_load(handle, m, f, &data) < 0) {
+		libxmp_iff_release(handle);
 		return -1;
 	}
 
-	iff_release(handle);
+	libxmp_iff_release(handle);
+
+	/* Alloc missing patterns */
+	for (i = 0; i < mod->pat; i++) {
+		if (mod->xxp[i] == NULL) {
+			if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0) {
+				return -1;
+			}
+		}
+	}
 
 	for (i = 0; i < mod->chn; i++) {
 		mod->xxc[i].pan = data.chn_pan[i] * 2;

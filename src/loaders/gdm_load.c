@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 /*
@@ -21,7 +35,7 @@
 static int gdm_test(HIO_HANDLE *, char *, const int);
 static int gdm_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader gdm_loader = {
+const struct format_loader libxmp_loader_gdm = {
 	"Generic Digital Music",
 	gdm_test,
 	gdm_load
@@ -37,7 +51,7 @@ static int gdm_test(HIO_HANDLE *f, char *t, const int start)
 		return -1;
 
 	hio_seek(f, start + 4, SEEK_SET);
-	read_title(f, t, 32);
+	libxmp_read_title(f, t, 32);
 
 	return 0;
 }
@@ -120,10 +134,10 @@ static int gdm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	tvmin = hio_read8(f);
 
 	if (tracker == 0) {
-		set_type(m, "GDM %d.%02d (2GDM %d.%02d)",
+		libxmp_set_type(m, "GDM %d.%02d (2GDM %d.%02d)",
 					vermaj, vermin, tvmaj, tvmin);
 	} else {
-		set_type(m, "GDM %d.%02d (unknown tracker %d.%02d)",
+		libxmp_set_type(m, "GDM %d.%02d (unknown tracker %d.%02d)",
 					vermaj, vermin, tvmaj, tvmin);
 	}
 
@@ -151,6 +165,8 @@ static int gdm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	smp_ofs = hio_read32l(f);
 	mod->ins = mod->smp = hio_read8(f) + 1;
 	
+	m->c4rate = C4_NTSC_RATE;
+
 	MODULE_INFO();
 
 	hio_seek(f, start + ord_ofs, SEEK_SET);
@@ -162,17 +178,19 @@ static int gdm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	hio_seek(f, start + ins_ofs, SEEK_SET);
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	for (i = 0; i < mod->ins; i++) {
 		int flg, c4spd, vol, pan;
 
-		if (subinstrument_alloc(mod, i, 1) < 0)
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 			return -1;
 
-		hio_read(buffer, 32, 1, f);
-		instrument_name(mod, i, buffer, 32);
+		if (hio_read(buffer, 1, 32, f) != 32)
+			return -1;
+
+		libxmp_instrument_name(mod, i, buffer, 32);
 		hio_seek(f, 12, SEEK_CUR);		/* skip filename */
 		hio_read8(f);			/* skip EMS handle */
 		mod->xxs[i].len = hio_read32l(f);
@@ -185,7 +203,7 @@ static int gdm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		
 		mod->xxi[i].sub[0].vol = vol > 0x40 ? 0x40 : vol;
 		mod->xxi[i].sub[0].pan = pan > 15 ? 0x80 : 0x80 + (pan - 8) * 16;
-		c2spd_to_note(c4spd, &mod->xxi[i].sub[0].xpo, &mod->xxi[i].sub[0].fin);
+		libxmp_c2spd_to_note(c4spd, &mod->xxi[i].sub[0].xpo, &mod->xxi[i].sub[0].fin);
 
 		mod->xxi[i].sub[0].sid = i;
 		mod->xxs[i].flg = 0;
@@ -236,6 +254,16 @@ static int gdm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 			if (c == 0) {
 				r++;
+
+				/* Sanity check */
+				if (len == 0) {
+					if  (r > 64)
+						return -1;
+				} else {
+					if (r >= 64)
+						return -1;
+				}
+
 				continue;
 			}
 
@@ -263,7 +291,7 @@ static int gdm_load(struct module_data *m, HIO_HANDLE *f, const int start)
  
 	mod->trk = mod->pat * mod->chn;
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	hio_seek(f, start + pat_ofs, SEEK_SET);
@@ -272,7 +300,7 @@ static int gdm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	for (i = 0; i < mod->pat; i++) {
 		int len, c, r, k;
 
-		if (pattern_tracks_alloc(mod, i, 64) < 0)
+		if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 			return -1;
 
 		len = hio_read16l(f);
@@ -285,6 +313,11 @@ static int gdm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 			if (c == 0) {
 				r++;
 				continue;
+			}
+
+			/* Sanity check */
+			if ((c & 0x1f) >= mod->chn || r >= 64) {
+				return -1;
 			}
 
 			event = &EVENT(i, c & 0x1f, r);
@@ -329,9 +362,11 @@ static int gdm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	D_(D_INFO "Stored samples: %d", mod->smp);
 
 	for (i = 0; i < mod->ins; i++) {
-		if (load_sample(m, f, SAMPLE_FLAG_UNS, &mod->xxs[i], NULL) < 0)
+		if (libxmp_load_sample(m, f, SAMPLE_FLAG_UNS, &mod->xxs[i], NULL) < 0)
 			return -1;
 	}
+
+	m->quirk |= QUIRK_ARPMEM;
 
 	return 0;
 }

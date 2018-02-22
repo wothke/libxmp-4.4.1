@@ -1,24 +1,38 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 #include "loader.h"
 
 
-static int ssn_test (HIO_HANDLE *, char *, const int);
-static int ssn_load (struct module_data *, HIO_HANDLE *, const int);
+static int c669_test (HIO_HANDLE *, char *, const int);
+static int c669_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader ssn_loader = {
+const struct format_loader libxmp_loader_669 = {
     "Composer 669",
-    ssn_test,
-    ssn_load
+    c669_test,
+    c669_load
 };
 
-static int ssn_test(HIO_HANDLE *f, char *t, const int start)
+static int c669_test(HIO_HANDLE *f, char *t, const int start)
 {
     uint16 id;
 
@@ -26,18 +40,24 @@ static int ssn_test(HIO_HANDLE *f, char *t, const int start)
     if (id != 0x6966 && id != 0x4a4e)
 	return -1;
 
-    hio_seek(f, 238, SEEK_CUR);
+    hio_seek(f, 110, SEEK_SET);
+    if (hio_read8(f) > 64)
+	return -1;
+    if (hio_read8(f) > 128)
+	return -1;
+
+    hio_seek(f, 240, SEEK_SET);
     if (hio_read8(f) != 0xff)
 	return -1;
 
     hio_seek(f, start + 2, SEEK_SET);
-    read_title(f, t, 36);
+    libxmp_read_title(f, t, 36);
 
     return 0;
 }
 
 
-struct ssn_file_header {
+struct c669_file_header {
     uint8 marker[2];		/* 'if'=standard, 'JN'=extended */
     uint8 message[108];		/* Song message */
     uint8 nos;			/* Number of samples (0-64) */
@@ -48,7 +68,7 @@ struct ssn_file_header {
     uint8 pbrk[128];		/* Break list for patterns */
 };
 
-struct ssn_instrument_header {
+struct c669_instrument_header {
     uint8 name[13];		/* ASCIIZ instrument name */
     uint32 length;		/* Instrument length */
     uint32 loop_start;		/* Instrument loop start */
@@ -61,22 +81,22 @@ struct ssn_instrument_header {
 /* Effects bug fixed by Miod Vallat <miodrag@multimania.com> */
 
 static const uint8 fx[] = {
-    FX_PER_PORTA_UP,
-    FX_PER_PORTA_DN,
-    FX_PER_TPORTA,
-    FX_FINETUNE,
-    FX_PER_VIBRATO,
+    FX_669_PORTA_UP,
+    FX_669_PORTA_DN,
+    FX_669_TPORTA,
+    FX_669_FINETUNE,
+    FX_669_VIBRATO,
     FX_SPEED_CP
 };
 
 
-static int ssn_load(struct module_data *m, HIO_HANDLE *f, const int start)
+static int c669_load(struct module_data *m, HIO_HANDLE *f, const int start)
 {
     struct xmp_module *mod = &m->mod;
     int i, j;
     struct xmp_event *event;
-    struct ssn_file_header sfh;
-    struct ssn_instrument_header sih;
+    struct c669_file_header sfh;
+    struct c669_instrument_header sih;
     uint8 ev[3];
 
     LOAD_INIT();
@@ -85,28 +105,38 @@ static int ssn_load(struct module_data *m, HIO_HANDLE *f, const int start)
     hio_read(&sfh.message, 108, 1, f);	/* Song message */
     sfh.nos = hio_read8(f);		/* Number of samples (0-64) */
     sfh.nop = hio_read8(f);		/* Number of patterns (0-128) */
+
+    /* Sanity check */
+    if (sfh.nos > 64 || sfh.nop > 128)
+	return -1;
+
     sfh.loop = hio_read8(f);		/* Loop order number */
-    hio_read(&sfh.order, 128, 1, f);	/* Order list */
-    hio_read(&sfh.speed, 128, 1, f);	/* Tempo list for patterns */
-    hio_read(&sfh.pbrk, 128, 1, f);	/* Break list for patterns */
+    if (hio_read(&sfh.order, 1, 128, f) != 128)	/* Order list */
+	return -1;
+    if (hio_read(&sfh.speed, 1, 128, f) != 128)	/* Tempo list for patterns */
+	return -1;
+    if (hio_read(&sfh.pbrk, 1, 128, f) != 128) 	/* Break list for patterns */
+	return -1;
 
     mod->chn = 8;
     mod->ins = sfh.nos;
     mod->pat = sfh.nop;
     mod->trk = mod->chn * mod->pat;
-    for (i = 0; i < 128; i++)
+    for (i = 0; i < 128; i++) {
 	if (sfh.order[i] > sfh.nop)
 	    break;
+    }
     mod->len = i;
     memcpy (mod->xxo, sfh.order, mod->len);
     mod->spd = 6;
-    mod->bpm = 76;		/* adjusted using Flux/sober.669 */
+    mod->bpm = 78;
     mod->smp = mod->ins;
 
-    m->quirk |= QUIRK_LINEAR;
+    m->period_type = PERIOD_CSPD;
+    m->c4rate = C4_NTSC_RATE;
 
-    copy_adjust(mod->name, sfh.message, 36);
-    set_type(m, strncmp((char *)sfh.marker, "if", 2) ?
+    libxmp_copy_adjust(mod->name, sfh.message, 36);
+    libxmp_set_type(m, strncmp((char *)sfh.marker, "if", 2) ?
 				"UNIS 669" : "Composer 669");
 
     MODULE_INFO();
@@ -117,51 +147,71 @@ static int ssn_load(struct module_data *m, HIO_HANDLE *f, const int start)
     
     /* Read and convert instruments and samples */
 
-    if (instrument_init(mod) < 0)
+    if (libxmp_init_instrument(m) < 0)
 	return -1;
 
     D_(D_INFO "Instruments: %d", mod->pat);
 
     for (i = 0; i < mod->ins; i++) {
-	if (subinstrument_alloc(mod, i, 1) < 0)
+	struct xmp_instrument *xxi = &mod->xxi[i];
+	struct xmp_sample *xxs = &mod->xxs[i];
+	struct xmp_subinstrument *sub;
+
+	if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 	    return -1;
+
+	sub = &xxi->sub[0];
 
 	hio_read (&sih.name, 13, 1, f);		/* ASCIIZ instrument name */
 	sih.length = hio_read32l(f);		/* Instrument size */
 	sih.loop_start = hio_read32l(f);	/* Instrument loop start */
 	sih.loopend = hio_read32l(f);		/* Instrument loop end */
 
-	mod->xxs[i].len = sih.length;
-	mod->xxs[i].lps = sih.loop_start;
-	mod->xxs[i].lpe = sih.loopend >= 0xfffff ? 0 : sih.loopend;
-	mod->xxs[i].flg = mod->xxs[i].lpe ? XMP_SAMPLE_LOOP : 0;	/* 1 == Forward loop */
-	mod->xxi[i].sub[0].vol = 0x40;
-	mod->xxi[i].sub[0].pan = 0x80;
-	mod->xxi[i].sub[0].sid = i;
+	/* Sanity check */
+	if (sih.length > MAX_SAMPLE_SIZE)
+	    return -1;
 
-	if (mod->xxs[i].len > 0)
-		mod->xxi[i].nsm = 1;
+	xxs->len = sih.length;
+	xxs->lps = sih.loop_start;
+	xxs->lpe = sih.loopend >= 0xfffff ? 0 : sih.loopend;
+	xxs->flg = xxs->lpe ? XMP_SAMPLE_LOOP : 0;	/* 1 == Forward loop */
 
-	instrument_name(mod, i, sih.name, 13);
+	sub->vol = 0x40;
+	sub->pan = 0x80;
+	sub->sid = i;
+
+	if (xxs->len > 0)
+		xxi->nsm = 1;
+
+	libxmp_instrument_name(mod, i, sih.name, 13);
 
 	D_(D_INFO "[%2X] %-14.14s %04x %04x %04x %c", i,
-		mod->xxi[i].name, mod->xxs[i].len, mod->xxs[i].lps, mod->xxs[i].lpe,
-		mod->xxs[i].flg & XMP_SAMPLE_LOOP ? 'L' : ' ');
+		xxi->name, xxs->len, xxs->lps, xxs->lpe,
+		xxs->flg & XMP_SAMPLE_LOOP ? 'L' : ' ');
     }
 
-    if (pattern_init(mod) < 0)
+    if (libxmp_init_pattern(mod) < 0)
 	return -1;
 
     /* Read and convert patterns */
     D_(D_INFO "Stored patterns: %d", mod->pat);
     for (i = 0; i < mod->pat; i++) {
-	if (pattern_tracks_alloc(mod, i, 64) < 0)
+	int pbrk;
+
+	if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 	    return -1;
 
-	EVENT(i, 0, 0).f2t = FX_SPEED_CP;
-	EVENT(i, 0, 0).f2p = sfh.speed[i];
-	EVENT(i, 1, sfh.pbrk[i]).f2t = FX_BREAK;
-	EVENT(i, 1, sfh.pbrk[i]).f2p = 0;
+	event = &EVENT(i, 0, 0);
+	event->f2t = FX_SPEED_CP;
+	event->f2p = sfh.speed[i];
+
+	pbrk = sfh.pbrk[i];
+	if (pbrk >= 64)
+	    return -1;
+
+	event = &EVENT(i, 1, pbrk);
+	event->f2t = FX_BREAK;
+	event->f2p = 0;
 
 	for (j = 0; j < 64 * 8; j++) {
 	    event = &EVENT(i, j % 8, j / 8);
@@ -179,31 +229,11 @@ static int ssn_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		if (MSN(ev[2]) > 5)
 		    continue;
 
-		/* If no instrument is playing on the channel where the
-		 * command was encountered, there will be no effect (except
-		 * for command 'f', it always changes the speed). 
-		 */
-		if (MSN(ev[2] < 5) && !event->ins)
-		    continue;
-
 		event->fxt = fx[MSN(ev[2])];
+		event->fxp = LSN(ev[2]);
 
-		switch (event->fxt) {
-		case FX_PER_PORTA_UP:
-		case FX_PER_PORTA_DN:
-		case FX_PER_TPORTA:
-		    event->fxp = LSN(ev[2]);
-		    break;
-		case FX_PER_VIBRATO:
-		    event->fxp = 0x40 || LSN(ev[2]);
-		    break;
-		case FX_FINETUNE:
-		    event->fxp = 0x80 + (LSN(ev[2]) << 4);
-		    break;
-		case FX_SPEED_CP:
-		    event->fxp = LSN(ev[2]);
+		if (event->fxt == FX_SPEED_CP) {
 		    event->f2t = FX_PER_CANCEL;
-		    break;
 		}
 	    }
 	}
@@ -215,14 +245,15 @@ static int ssn_load(struct module_data *m, HIO_HANDLE *f, const int start)
     for (i = 0; i < mod->ins; i++) {
 	if (mod->xxs[i].len <= 2)
 	    continue;
-	if (load_sample(m, f, SAMPLE_FLAG_UNS, &mod->xxs[i], NULL) < 0)
+	if (libxmp_load_sample(m, f, SAMPLE_FLAG_UNS, &mod->xxs[i], NULL) < 0)
 	    return -1;
     }
 
-    for (i = 0; i < mod->chn; i++)
-	mod->xxc[i].pan = (i % 2) * 0xff;
+    for (i = 0; i < mod->chn; i++) {
+	mod->xxc[i].pan = DEFPAN((i % 2) * 0xff);
+    }
 
-    m->quirk |= QUIRK_PERPAT;	    /* Cancel persistent fx at each new pat */
+    m->quirk |= QUIRK_PBALL|QUIRK_PERPAT;
 
     return 0;
 }

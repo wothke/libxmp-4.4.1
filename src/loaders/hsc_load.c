@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 #include "loader.h"
@@ -21,7 +35,7 @@
 static int hsc_test (HIO_HANDLE *, char *, const int);
 static int hsc_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader hsc_loader = {
+const struct format_loader libxmp_loader_hsc = {
     "HSC-Tracker",
     hsc_test,
     hsc_load
@@ -60,7 +74,7 @@ static int hsc_test(HIO_HANDLE *f, char *t, const int start)
 	}
     }
 
-    read_title(f, t, 0);
+    libxmp_read_title(f, t, 0);
 
     return 0;
 }
@@ -95,18 +109,18 @@ static int hsc_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
     m->quirk |= QUIRK_LINEAR;
 
-    set_type(m, "HSC-Tracker");
+    libxmp_set_type(m, "HSC-Tracker");
 
     MODULE_INFO();
 
     /* Read instruments */
-    if (instrument_init(mod) < 0)
+    if (libxmp_init_instrument(m) < 0)
 	return -1;
 
-    hio_read (buf, 1, 128 * 12, f);
+    hio_read(buf, 1, 128 * 12, f);
     sid = buf;
     for (i = 0; i < mod->ins; i++, sid += 12) {
-	if (subinstrument_alloc(mod, i, 1) < 0)
+	if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 	    return -1;
 
 	mod->xxi[i].nsm = 1;
@@ -117,15 +131,15 @@ static int hsc_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	mod->xxi[i].sub[0].sid = i;
 	mod->xxi[i].rls = LSN(sid[7]) * 32;	/* carrier release */
 
-	if (load_sample(m, f, SAMPLE_FLAG_ADLIB | SAMPLE_FLAG_HSC,
+	if (libxmp_load_sample(m, f, SAMPLE_FLAG_ADLIB | SAMPLE_FLAG_HSC,
 					&mod->xxs[i], (char *)sid) < 0)
 		return -1;
     }
 
     /* Read orders */
     for (pat = i = 0; i < 51; i++) {
-	hio_read (&mod->xxo[i], 1, 1, f);
-	if (mod->xxo[i] & 0x80)
+	mod->xxo[i] = hio_read8(f);
+	if (mod->xxo[i] > 127)
 	    break;			/* FIXME: jump line */
 	if (mod->xxo[i] > pat)
 	    pat = mod->xxo[i];
@@ -139,19 +153,19 @@ static int hsc_load(struct module_data *m, HIO_HANDLE *f, const int start)
     D_(D_INFO "Instruments: %d", mod->ins);
     D_(D_INFO "Stored patterns: %d", mod->pat);
 
-    if (pattern_init(mod) < 0)
+    if (libxmp_init_pattern(mod) < 0)
 	return -1;
 
     /* Read and convert patterns */
     for (i = 0; i < mod->pat; i++) {
 	int ins[9] = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
 
-	if (pattern_tracks_alloc(mod, i, 64) < 0)
+	if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 	    return -1;
 
         for (r = 0; r < mod->xxp[i]->rows; r++) {
             for (c = 0; c < 9; c++) {
-	        hio_read (e, 1, 2, f);
+	        hio_read(e, 1, 2, f);
 	        event = &EVENT (i, c, r);
 		if (e[0] & 0x80) {
 		    ins[c] = e[1] + 1;

@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -161,7 +161,7 @@ struct it_sample_header {
 	uint8 dosname[12];	/* DOS filename */
 	uint8 zero;		/* Always zero */
 	uint8 gvl;		/* Global volume for instrument */
-	uint8 flags;		/* Instrument flags */
+	uint8 flags;		/* Sample flags */
 	uint8 vol;		/* Volume */
 	uint8 name[26];		/* ASCIIZ sample name */
 	uint8 convert;		/* Sample flags */

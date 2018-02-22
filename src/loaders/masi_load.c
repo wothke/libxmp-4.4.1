@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -57,14 +57,12 @@
 
 /*
  * Claudio's note: Sinaria seems to have a finetune byte just before
- * volume, slightly different sample size (subtract 2 bytes?) and some
- * kind of (stereo?) interleaved sample, with 16-byte frames (see Sinaria
- * songs 5 and 8). Sinaria song 10 sounds ugly, possibly caused by wrong
- * pitchbendings (see note above).
+ * volume and some kind of (stereo?) interleaved sample, with 16-byte
+ * frames (see Sinaria songs 5 and 8). Sinaria song 10 still sounds
+ * ugly, maybe caused by finetune issues?
  */
 
-/* FIXME: TODO: sinaria effects */
-
+#include <limits.h>
 #include "loader.h"
 #include "iff.h"
 #include "period.h"
@@ -73,12 +71,13 @@
 #define MAGIC_FILE	MAGIC4('F','I','L','E')
 #define MAGIC_TITL	MAGIC4('T','I','T','L')
 #define MAGIC_OPLH	MAGIC4('O','P','L','H')
+#define MAGIC_PPAN	MAGIC4('P','P','A','N')
 
 
 static int masi_test (HIO_HANDLE *, char *, const int);
 static int masi_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader masi_loader = {
+const struct format_loader libxmp_loader_masi = {
 	"Epic MegaGames MASI",
 	masi_test,
 	masi_load
@@ -106,9 +105,9 @@ static int masi_test(HIO_HANDLE *f, char *t, const int start)
 
 	if (hio_read32b(f) == MAGIC_TITL) {
 		val = hio_read32l(f);
-		read_title(f, t, val);
+		libxmp_read_title(f, t, val);
 	} else {
-		read_title(f, t, 0);
+		libxmp_read_title(f, t, 0);
 	}
 
 	return 0;
@@ -170,15 +169,15 @@ static int get_dsmp(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	struct xmp_subinstrument *sub;
 	struct xmp_sample *xxs;
 	struct local_data *data = (struct local_data *)parm;
-	int i, srate;
+	int i, srate, flags;
 	int finetune;
 
-	hio_read8(f);					/* flags */
+	flags = hio_read8(f);				/* flags */
 	hio_seek(f, 8, SEEK_CUR);			/* songname */
 	hio_seek(f, data->sinaria ? 8 : 4, SEEK_CUR);	/* smpid */
 
 	i = data->cur_ins;
-	if (subinstrument_alloc(mod, i, 1) < 0)
+	if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 		return -1;
 
 	xxi = &mod->xxi[i];
@@ -186,14 +185,13 @@ static int get_dsmp(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	xxs = &mod->xxs[i];
 
 	hio_read(&xxi->name, 1, 31, f);
-	adjust_string((char *)xxi->name);
 	hio_seek(f, 8, SEEK_CUR);
 	hio_read8(f);		/* insno */
 	hio_read8(f);
 	xxs->len = hio_read32l(f);
 	xxs->lps = hio_read32l(f);
 	xxs->lpe = hio_read32l(f);
-	xxs->flg = xxs->lpe > 2 ? XMP_SAMPLE_LOOP : 0;
+	xxs->flg = flags & 0x80 ? XMP_SAMPLE_LOOP : 0;
 	hio_read16l(f);
 
 	if ((int32)xxs->lpe < 0)
@@ -204,11 +202,6 @@ static int get_dsmp(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 
 	finetune = 0;
 	if (data->sinaria) {
-		if (xxs->len > 2)
-			xxs->len -= 2;
-		if (xxs->lpe > 2)
-			xxs->lpe -= 2;
-
 		finetune = (int8)(hio_read8s(f) << 4);
 	}
 
@@ -216,19 +209,18 @@ static int get_dsmp(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	hio_read32l(f);
 	sub->pan = 0x80;
 	sub->sid = i;
-	srate = hio_read32l(f);
+	srate = hio_read16l(f);
 
 	D_(D_INFO "[%2X] %-32.32s %05x %05x %05x %c V%02x %+04d %5d", i,
 		xxi->name, xxs->len, xxs->lps, xxs->lpe,
 		xxs->flg & XMP_SAMPLE_LOOP ?  'L' : ' ',
 		sub->vol, finetune, srate);
 
-	srate = 8363 * srate / 8448;
-	c2spd_to_note(srate, &sub->xpo, &sub->fin);
+	libxmp_c2spd_to_note(srate, &sub->xpo, &sub->fin);
 	sub->fin += finetune;
 
 	hio_seek(f, 16, SEEK_CUR);
-	if (load_sample(m, f, SAMPLE_FLAG_8BDIFF, xxs, NULL) < 0)
+	if (libxmp_load_sample(m, f, SAMPLE_FLAG_8BDIFF, xxs, NULL) < 0)
 		return -1;
 
 	data->cur_ins++;
@@ -236,6 +228,19 @@ static int get_dsmp(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	return 0;
 }
 
+
+static uint8 convert_porta(uint8 param, int sinaria)
+{
+	if (sinaria) {
+		return param;
+	}
+
+	if (param < 4) {
+		return param | 0xf0;
+	} else {
+		return param >> 2;
+	}
+}
 
 static int get_pbod(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 {
@@ -253,14 +258,20 @@ static int get_pbod(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	hio_read(data->pnam + i * 8, 1, data->sinaria ? 8 : 4, f);
 
 	rows = hio_read16l(f);
+	if (hio_error(f)) {
+		return -1;
+	}
 
-	if (pattern_tracks_alloc(mod, i, rows) < 0)
+	if (libxmp_alloc_pattern_tracks(mod, i, rows) < 0)
 		return -1;
 
 	r = 0;
 
 	do {
 		rowlen = hio_read16l(f) - 2;
+		if (hio_error(f)) {
+			return -1;
+		}
 		while (rowlen > 0) {
 			flag = hio_read8(f);
 	
@@ -276,9 +287,9 @@ static int get_pbod(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 				uint8 note = hio_read8(f);
 				rowlen--;
 				if (data->sinaria)
-					note += 37;
+					note += 36;
 				else
-					note = (note >> 4) * 12 + (note & 0x0f) + 2 + 12;
+					note = (note >> 4) * 12 + (note & 0x0f) + 1 + 12;
 				event->note = note;
 			}
 
@@ -288,7 +299,7 @@ static int get_pbod(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 			}
 	
 			if (flag & 0x20) {
-				event->vol = hio_read8(f) / 2;
+				event->vol = hio_read8(f) / 2 + 1;
 				rowlen--;
 			}
 	
@@ -296,23 +307,29 @@ static int get_pbod(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 				uint8 fxt = hio_read8(f);
 				uint8 fxp = hio_read8(f);
 				rowlen -= 2;
-	
+
+#if 0
 				/* compressed events */
 				if (fxt >= 0x40) {
 					switch (fxp >> 4) {
 					case 0x0: {
 						uint8 note;
 						note = (fxt>>4)*12 +
-							(fxt & 0x0f) + 2;
+							(fxt & 0x0f) + 1;
 						event->note = note;
 						fxt = FX_TONEPORTA;
 						fxp = (fxp + 1) * 2;
 						break; }
 					default:
 D_(D_CRIT "p%d r%d c%d: compressed event %02x %02x\n", i, r, chan, fxt, fxp);
+						return -1;
 					}
 				} else
+#endif
+
 				switch (fxt) {
+
+				/* Volume slide */
 				case 0x01:		/* fine volslide up */
 					fxt = FX_EXTENDED;
 					fxp = (EX_F_VSLIDE_UP << 4) |
@@ -331,43 +348,137 @@ D_(D_CRIT "p%d r%d c%d: compressed event %02x %02x\n", i, r, chan, fxt, fxp);
 					fxt = FX_VOLSLIDE;
 					fxp /= 2;
 					break;
-			    	case 0x0C:		/* portamento up */
+
+				/* Portamento */
+				case 0x0b:		/* fine portamento up */
 					fxt = FX_PORTA_UP;
-					fxp = (fxp - 1) / 2;
+					fxp = (EX_F_PORTA_UP << 4) |
+						convert_porta(fxp, data->sinaria);
 					break;
-				case 0x0E:		/* portamento down */
+			    	case 0x0c:		/* portamento up */
+					fxt = FX_PORTA_UP;
+					fxp = convert_porta(fxp, data->sinaria);
+					break;
+				case 0x0d:		/* fine portamento up */
 					fxt = FX_PORTA_DN;
-					fxp = (fxp - 1) / 2;
+					fxp = (EX_F_PORTA_DN << 4) |
+						convert_porta(fxp, data->sinaria);
+					break;
+				case 0x0e:		/* portamento down */
+					fxt = FX_PORTA_DN;
+					fxp = convert_porta(fxp, data->sinaria);
 					break;
 				case 0x0f:		/* tone portamento */
 					fxt = FX_TONEPORTA;
-					fxp /= 4;
+					fxp >>= 2;
 					break;
+				case 0x10:		/* toneporta + vslide up */
+					fxt = FX_TONE_VSLIDE;
+					fxp = fxt & 0xf0;
+					break;
+				case 0x11:		/* glissando */
+					fxt = FX_EXTENDED;
+					fxp = (EX_GLISS << 4) | (fxp & 0x0f);
+					break;
+				case 0x12:		/* toneporta + vslide down */
+					fxt = FX_TONE_VSLIDE;
+					fxp >>= 4;
+					break;
+
+				/* 0x13: S3M S: crashes MASI */
+
+				/* Vibrato */
 				case 0x15:		/* vibrato */
 					fxt = data->sinaria ?
 						FX_VIBRATO : FX_FINE_VIBRATO;
 					/* fxp remains the same */
 					break;
+				case 0x16:		/* vibrato waveform */
+					fxt = FX_EXTENDED;
+					fxp = (EX_VIBRATO_WF << 4) | (fxp & 0x0f); 
+					break;
+				case 0x17:		/* vibrato + vslide up */
+					fxt = FX_VIBRA_VSLIDE;
+					fxp >>= 4;
+					break;	
+				case 0x18:		/* vibrato + vslide down */
+					fxt = FX_VIBRA_VSLIDE;
+					fxp = fxp & 0x0f;
+					break;	
+
+				/* Tremolo */
+				case 0x1f:		/* tremolo */
+					fxt = FX_TREMOLO;
+					/* fxp remains the same */
+					break;
+				case 0x20:		/* tremolo waveform */
+					fxt = FX_EXTENDED;
+					fxp = (EX_TREMOLO_WF << 4) | (fxp & 0x0f); 
+					break;
+
+				/* Sample commands */
+				case 0x29:		/* 3-byte offset */
+					fxt = FX_OFFSET;
+					/* use only the middle byte */
+					fxp = hio_read8(f);
+					hio_read8(f);
+					rowlen -= 2;
+					break;
 				case 0x2a:		/* retrig note */
 					fxt = FX_EXTENDED;
 					fxp = (EX_RETRIG << 4) | (fxp & 0x0f); 
 					break;
-				case 0x29:		/* unknown */
-					hio_read16l(f);
-					rowlen -= 2;
+				case 0x2b:		/* note cut */
+					fxt = FX_EXTENDED;
+					fxp = (EX_CUT << 4) | (fxp & 0x0f); 
 					break;
-				case 0x33:		/* position Jump */
+				case 0x2c:		/* note delay */
+					fxt = FX_EXTENDED;
+					fxp = (EX_DELAY << 4) | (fxp & 0x0f); 
+					break;
+
+				/* Position change */
+				case 0x33:		/* position jump */
+					/* not used in MASI */
 					fxt = FX_JUMP;
+					fxp >>= 1;
+					hio_read8(f);
+					rowlen--;
 					break;
 			    	case 0x34:		/* pattern break */
+					/* not used in MASI */
 					fxt = FX_BREAK;
 					break;
-				case 0x3D:		/* speed */
+				case 0x35:		/* pattern loop */
+					fxt = FX_EXTENDED;
+					fxp = (EX_PATTERN_LOOP << 4) | (fxp & 0x0f); 
+					break;
+				case 0x36:		/* pattern delay */
+					fxt = FX_EXTENDED;
+					fxp = (EX_PATT_DELAY << 4) | (fxp & 0x0f); 
+					break;
+
+				/* Speed change */
+				case 0x3d:		/* speed */
 					fxt = FX_SPEED;
 					break;
-				case 0x3E:		/* tempo */
+				case 0x3e:		/* tempo */
 					fxt = FX_SPEED;
 					break;
+
+				/* Other */
+				case 0x47:		/* arpeggio */
+					fxt = FX_S3M_ARPEGGIO;
+					break;
+				case 0x48:		/* set finetune */
+					fxt = FX_EXTENDED;
+					fxp = (EX_FINETUNE << 4) | (fxp & 0x0f); 
+					break;
+				case 0x49:		/* set pan */
+					fxt = FX_SETPAN;
+					fxp <<= 4; 
+					break;
+
 				default:
 D_(D_CRIT "p%d r%d c%d: unknown effect %02x %02x\n", i, r, chan, fxt, fxp);
 					fxt = fxp = 0;
@@ -395,57 +506,200 @@ static int get_song(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	return 0;
 }
 
-static int get_song_2(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
+static int subchunk_oplh(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 {
 	struct xmp_module *mod = &m->mod;
 	struct local_data *data = (struct local_data *)parm;
-	uint32 magic;
-	char c, buf[20];
-	int i;
+	int first_order_chunk = INT_MAX;
+	int num_chunk, i;
 
-	hio_read(buf, 1, 9, f);
-	hio_read16l(f);
+	/* First two bytes = Number of chunks that follow */
+	num_chunk = hio_read16l(f);
 
-	D_(D_INFO "Subsong title: %-9.9s", buf);
+	/* Sub sub chunks */
+	for (i = 0; i < num_chunk && size > 0; i++) {
+		int opcode = hio_read8(f);
 
-	magic = hio_read32b(f);
-	while (magic != MAGIC_OPLH) {
-		int skip;
-		skip = hio_read32l(f);;
-		hio_seek(f, skip, SEEK_CUR);
-		magic = hio_read32b(f);
-	}
+		size--;
 
-	hio_read32l(f);	/* chunk size */
+		if (opcode == 0) {	/* last sub sub chunk */
+			break;
+		}
 
-	hio_seek(f, 9, SEEK_CUR);		/* unknown data */
-	
-	c = hio_read8(f);
-	for (i = 0; c != 0x01; c = hio_read8(f)) {
-		switch (c) {
-		case 0x07:
+		/* Saga Musix's note in OpenMPT:
+		 *
+		 * "This is more like a playlist than a collection of global
+		 *  values. In theory, a tempo item inbetween two order items
+		 *  should modify the tempo when switching patterns. No module
+		 *  uses this feature in practice though, so we can keep our
+		 *  loader simple. Unimplemented opcodes do nothing or freeze
+		 *  MASI."
+		 */
+		switch (opcode) {
+		case 0x01:			/* Play order list item */
+			hio_read(data->pord + mod->len * 8, 1, data->sinaria ? 8 : 4, f);
+			size -= data->sinaria ? 8 : 4;
+			mod->len++;
+			if (first_order_chunk == INT_MAX) {
+				first_order_chunk = i;
+			}
+			break;
+
+		/* 0x02: Play range */
+		/* 0x03: Jump loop */
+
+		case 0x04: {			/* Jump line (restart position) */
+			int restart_chunk = hio_read16l(f);
+			size -= 2;
+
+			/* This jumps to the command line, but since we're converting
+			 * play order list items to our order list, only change the
+			 * restart position if it's after the first order chunk.
+			 */
+
+			if (restart_chunk >= first_order_chunk) {
+				mod->rst = restart_chunk - first_order_chunk;
+			}
+
+			break; }
+
+		/* 0x05: Channel flip */
+		/* 0x06: Transpose */
+
+		case 0x07:			/* Default speed */
 			mod->spd = hio_read8(f);
-			hio_read8(f);		/* 08 */
+			size--;
+			break;
+		case 0x08:			/* Default tempo */
 			mod->bpm = hio_read8(f);
+			size--;
 			break;
-		case 0x0d:
-			hio_read8(f);		/* channel number? */
-			mod->xxc[i].pan = hio_read8(f);
-			hio_read8(f);		/* flags? */
-			i++;
+		case 0x0c:			/* Sample map table */
+			hio_read16l(f);
+			hio_read16l(f);
+			hio_read16l(f);
+			size -= 6;
 			break;
-		case 0x0e:
-			hio_read8(f);		/* channel number? */
-			hio_read8(f);		/* ? */
-			break;
+		case 0x0d: {			/* Channel panning table */
+			int chn = hio_read8(f);
+			int pan = hio_read8(f);
+			int type = hio_read8(f);
+			struct xmp_channel *xxc;
+
+			if (chn >= XMP_MAX_CHANNELS) {
+				break;
+			}
+
+			xxc = &mod->xxc[chn];
+
+			size -= 3;
+
+			switch (type) {
+			case 0:		/* use panning */
+				xxc->pan = pan ^ 0x80;
+				break;
+			case 2:		/* surround */
+				xxc->pan = 0x80;
+                        	xxc->flg |= XMP_CHANNEL_SURROUND;
+				break;
+			case 4:		/* center */
+				xxc->pan = 0x80;
+				break;
+			}
+			break; }
+		case 0x0e: {			/* Channel volume table */
+			int chn = hio_read8(f);
+			int vol = hio_read8(f);
+			struct xmp_channel *xxc;
+
+			if (chn >= XMP_MAX_CHANNELS) {
+				break;
+			}
+
+			xxc = &mod->xxc[chn];
+
+			size -= 2;
+
+			xxc->vol = (vol >> 2) + 1;
+			break; }
 		default:
-			printf("channel %d: %02x %02x\n", i, c, hio_read8(f));
+			/*printf("channel %d: %02x %02x\n", i, c, hio_read8(f));*/
+			return -1;
 		}
 	}
 
-	for (; c == 0x01; c = hio_read8(f)) {
-		hio_read(data->pord + mod->len * 8, 1, data->sinaria ? 8 : 4, f);
-		mod->len++;
+	return 0;
+}
+
+/* Sinaria channel panning table */
+static int subchunk_ppan(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
+{
+	struct xmp_module *mod = &m->mod;
+	int i;
+
+	for (i = 0; i < XMP_MAX_CHANNELS && size > 0; i++) {
+		struct xmp_channel *xxc = &mod->xxc[i];
+		int type = hio_read8(f);
+		int pan = hio_read8(f);
+
+		size -= 2;
+
+		switch (type) {
+		case 0:		/* use panning */
+			xxc->pan = pan ^ 0x80;
+			break;
+		case 2:		/* surround */
+			xxc->pan = 0x80;
+                       	xxc->flg |= XMP_CHANNEL_SURROUND;
+			break;
+		case 4:		/* center */
+			xxc->pan = 0x80;
+			break;
+		}
+	}
+
+	return 0;
+}
+
+/* Subchunk loader based on OpenMPT LoadPSM.cpp */
+static int get_song_2(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
+{
+	uint32 magic;
+	char buf[20];
+
+	hio_read(buf, 1, 9, f);
+	hio_read16l(f);
+	size -= 11;
+
+	D_(D_INFO "Subsong title: %-9.9s", buf);
+
+	/* Iterate over subchunks. We want OPLH and PPAN */
+	while (size > 0) {
+		magic = hio_read32b(f);
+		int subchunk_size = hio_read32l(f);
+
+		if (subchunk_size == 0) {
+			return -1;
+		}
+
+		size -= subchunk_size;
+
+		switch (magic) {
+		case MAGIC_OPLH:
+			if (subchunk_oplh(m, size, f, parm) < 0) {
+				return -1;
+			}
+			break;
+
+		case MAGIC_PPAN:
+			if (subchunk_ppan(m, size, f, parm) < 0) {
+				return -1;
+			}
+			break;
+
+		default:
+			hio_seek(f, subchunk_size, SEEK_CUR);
+		}
 	}
 
 	return 0;
@@ -472,29 +726,29 @@ static int masi_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	data.cur_ins = 0;
 	offset = hio_tell(f);
 
-	handle = iff_new();
+	handle = libxmp_iff_new();
 	if (handle == NULL)
 		goto err;
 
 	/* IFF chunk IDs */
-	ret = iff_register(handle, "TITL", get_titl);
-	ret |= iff_register(handle, "SDFT", get_sdft);
-	ret |= iff_register(handle, "SONG", get_song);
-	ret |= iff_register(handle, "DSMP", get_dsmp_cnt);
-	ret |= iff_register(handle, "PBOD", get_pbod_cnt);
+	ret = libxmp_iff_register(handle, "TITL", get_titl);
+	ret |= libxmp_iff_register(handle, "SDFT", get_sdft);
+	ret |= libxmp_iff_register(handle, "SONG", get_song);
+	ret |= libxmp_iff_register(handle, "DSMP", get_dsmp_cnt);
+	ret |= libxmp_iff_register(handle, "PBOD", get_pbod_cnt);
 
 	if (ret != 0)
 		goto err;
 
-	iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
+	libxmp_iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
 
 	/* Load IFF chunks */
-	if (iff_load(handle, m, f, &data) < 0) {
-		iff_release(handle);
+	if (libxmp_iff_load(handle, m, f, &data) < 0) {
+		libxmp_iff_release(handle);
 		goto err;
 	}
 
-	iff_release(handle);
+	libxmp_iff_release(handle);
 
 	mod->trk = mod->pat * mod->chn;
 	data.pnam = malloc(mod->pat * 8);	/* pattern names */
@@ -505,15 +759,17 @@ static int masi_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	if (data.pord == NULL)
 		goto err2;
 
-	set_type(m, data.sinaria ?
+	libxmp_set_type(m, data.sinaria ?
 		"Sinaria PSM" : "Epic MegaGames MASI PSM");
+
+	m->c4rate = C4_NTSC_RATE;
 
 	MODULE_INFO();
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		goto err3;
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		goto err3;
 
 	D_(D_INFO "Stored patterns: %d", mod->pat);
@@ -523,27 +779,27 @@ static int masi_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	mod->len = 0;
 
-	handle = iff_new();
+	handle = libxmp_iff_new();
 	if (handle == NULL)
 		goto err3;
 
 	/* IFF chunk IDs */
-	ret = iff_register(handle, "SONG", get_song_2);
-	ret |= iff_register(handle, "DSMP", get_dsmp);
-	ret |= iff_register(handle, "PBOD", get_pbod);
+	ret = libxmp_iff_register(handle, "SONG", get_song_2);
+	ret |= libxmp_iff_register(handle, "DSMP", get_dsmp);
+	ret |= libxmp_iff_register(handle, "PBOD", get_pbod);
 
 	if (ret != 0)
 		goto err3;
 
-	iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
+	libxmp_iff_set_quirk(handle, IFF_LITTLE_ENDIAN);
 
 	/* Load IFF chunks */
-	if (iff_load(handle, m, f, &data) < 0) {
-		iff_release(handle);
+	if (libxmp_iff_load(handle, m, f, &data) < 0) {
+		libxmp_iff_release(handle);
 		goto err3;
 	}
 
-	iff_release(handle);
+	libxmp_iff_release(handle);
 
 	for (i = 0; i < mod->len; i++) {
 		for (j = 0; j < mod->pat; j++) {

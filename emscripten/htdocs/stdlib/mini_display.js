@@ -62,7 +62,7 @@ SongDisplay = function(displayAccessor, colors, barType, cpuLimit, doAnimate) {
 	this.barType= barType;
 	
 	this.WIDTH= 800;
-	this.HEIGHT= 200;
+	this.HEIGHT= 100;
 	
 	this.barWidth = 5;
 	this.barHeigth= 30;
@@ -77,13 +77,13 @@ SongDisplay = function(displayAccessor, colors, barType, cpuLimit, doAnimate) {
 	
 	this.canvasSpectrum = document.getElementById('spectrumCanvas');
 	this.ctxSpectrum = this.canvasSpectrum.getContext('2d');
-	this.canvasSpectrum.width = this.WIDTH;	// redundant..
+//	this.canvasSpectrum.width = this.WIDTH;
 
 	this.mozReflectSpectrum = document.getElementById('moz-reflect-spectrum');
 	this.mozReflectLogo = document.getElementById('moz-reflect-logo');
 	
-	var canvas2 = document.getElementById('logoCanvas');
-	this.ctxLegend = canvas2.getContext('2d');	
+	this.canvasLegend = document.getElementById('logoCanvas');
+	this.ctxLegend = this.canvasLegend.getContext('2d');	
 };
 
 SongDisplay.prototype = {
@@ -137,6 +137,11 @@ SongDisplay.prototype = {
 				for (var i= 0; i<numBars; i++) this.caps[i]= 0;
 			}
 			
+			try {
+				// seems that dumbshit Safari (11.0.1 OS X) uses the fillStyle for "clearRect"!
+				this.ctxSpectrum.fillStyle = "rgba(0, 0, 0, 0.0)";
+			} catch (err) {}
+
 			this.ctxSpectrum.clearRect(0, 0, this.WIDTH, this.HEIGHT);
 
 			this.ctxSpectrum.lineCap = 'round';
@@ -226,29 +231,36 @@ SongDisplay.prototype = {
 	},
 	redrawSongInfo: function() {
 		this.reqAnimationFrame();	// start the animation going
-	
+
+		try {
+			// seems that the Safari (11.0.1 OS X) idiots use the fillStyle for 
+			// "clearRect", i.e. it is impossible to properly make this canvas 
+			// completely transparent
+			this.ctxLegend.fillStyle = "rgba(0, 0, 0, 0.0)";
+		} catch (err) {}
+		
 		this.ctxLegend.clearRect(0, 0, 800, 300);
+		//this.canvasLegend.width  += 0;
 		
 		this.ctxLegend.textBaseline = "middle";
 		this.ctxLegend.fillStyle = '#000';
 		this.ctxLegend.strokeStyle = "#FFFFFF";
 		
-//		this.ctxLegend.font = '90px serif bold';
-		this.ctxLegend.font = '90px serif';	// for some reason the Chrome idiots removed support for "bold"
+		this.ctxLegend.font = '30px  arial, sans-serif';	// FUCKING CHROME SHIT NO LONGER UNDERSTANDS: '90px serif bold'
 		
-		this.text(this.ctxLegend, this.displayAccessor.getDisplayTitle(), 20, 70);
+		this.text(this.ctxLegend, this.displayAccessor.getDisplayTitle(), 20, 15);
 		
-		this.ctxLegend.font = '25px sans-serif';
-		this.text(this.ctxLegend, this.displayAccessor.getDisplaySubtitle(), 20, 125);
+		this.ctxLegend.font = '15px sans-serif';
+		this.text(this.ctxLegend, this.displayAccessor.getDisplaySubtitle(), 20, 35);
 
 		this.ctxLegend.fillStyle = '#888';
-		this.ctxLegend.font = '25px sans-serif';
+		this.ctxLegend.font = '15px sans-serif';
 
 		this.ctxLegend.textBaseline = 'bottom';
 
-		this.text(this.ctxLegend, this.displayAccessor.getDisplayLine1(), 20, 190);
-		this.text(this.ctxLegend, this.displayAccessor.getDisplayLine2(), 20, 230);
-		this.text(this.ctxLegend, this.displayAccessor.getDisplayLine3(), 20, 270);
+		this.text(this.ctxLegend, this.displayAccessor.getDisplayLine1(), 20, 65);
+		this.text(this.ctxLegend, this.displayAccessor.getDisplayLine2(), 20, 80);
+		this.text(this.ctxLegend, this.displayAccessor.getDisplayLine3(), 20, 95);
 		
 		// hack: make sure dumb Firefox knows that redraw is needed..
 		this.mozReflectLogo.style.visibility = "hidden";

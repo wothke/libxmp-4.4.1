@@ -17,6 +17,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include "common.h"
+#include "depacker.h"
 #include "readrle.h"
 #include "readhuff.h"
 #include "readlzw.h"
@@ -37,32 +38,49 @@ static int read_file_header(FILE *in, struct archived_file_header_tag *hdrp)
 {
 	int hlen, start /*, ver*/;
 	int i;
+	int error;
 
-	fseek(in, 8, SEEK_CUR);			/* skip magic */
-	hlen = read32l(in) / 36;
-	start = read32l(in);
-	/*ver =*/ read32l(in);
+	if (fseek(in, 8, SEEK_CUR) < 0)		/* skip magic */
+		return -1;
+	hlen = read32l(in, &error) / 36;
+	if (error != 0) return -1;
+	start = read32l(in, &error);
+	if (error != 0) return -1;
+	/*ver =*/ read32l(in, &error);
+	if (error != 0) return -1;
 
-	read32l(in);
-	/*ver =*/ read32l(in);
+	read32l(in, &error);
+	if (error != 0) return -1;
+	/*ver =*/ read32l(in, &error);
+	if (error != 0) return -1;
 
-	fseek(in, 68, SEEK_CUR);		/* reserved */
+	if (fseek(in, 68, SEEK_CUR) < 0)	/* reserved */
+		return -1;
 
 	for (i = 0; i < hlen; i++) {
-		int x = read8(in);
+		int x = read8(in, &error);
+		if (error != 0) return -1;
 
 		if (x == 0)			/* end? */
 			break;
 
 		hdrp->method = x & 0x7f;
-		fread(hdrp->name, 1, 11, in);
+		if (fread(hdrp->name, 1, 11, in) != 11) {
+			return -1;
+		}
 		hdrp->name[12] = 0;
-		hdrp->orig_size = read32l(in);
-		read32l(in);
-		read32l(in);
-		x = read32l(in);
-		hdrp->compressed_size = read32l(in);
-		hdrp->offset = read32l(in);
+		hdrp->orig_size = read32l(in, &error);
+		if (error != 0) return -1;
+		read32l(in, &error);
+		if (error != 0) return -1;
+		read32l(in, &error);
+		if (error != 0) return -1;
+		x = read32l(in, &error);
+		if (error != 0) return -1;
+		hdrp->compressed_size = read32l(in, &error);
+		if (error != 0) return -1;
+		hdrp->offset = read32l(in, &error);
+		if (error != 0) return -1;
 
 		if (x == 1)			/* deleted */
 			continue;
@@ -78,7 +96,7 @@ static int read_file_header(FILE *in, struct archived_file_header_tag *hdrp)
 		break;
 	}
 
-	return 1;
+	return 0;
 }
 
 /* read file data, assuming header has just been read from in
@@ -92,16 +110,22 @@ static unsigned char *read_file_data(FILE *in,
 	unsigned char *data;
 	int siz = hdrp->compressed_size;
 
-	if ((data = malloc(siz)) == NULL)
-		return NULL;
-
-	fseek(in, hdrp->offset, SEEK_SET);
+	if ((data = malloc(siz)) == NULL) {
+		goto err;
+	}
+	if (fseek(in, hdrp->offset, SEEK_SET) < 0) {
+		goto err2;
+	}
 	if (fread(data, 1, siz, in) != siz) {
-		free(data);
-		data = NULL;
+		goto err2;
 	}
 
 	return data;
+
+    err2:
+	free(data);
+    err:
+	return NULL;
 }
 
 static int arcfs_extract(FILE *in, FILE *out)
@@ -110,7 +134,7 @@ static int arcfs_extract(FILE *in, FILE *out)
 	unsigned char *data, *orig_data;
 	int exitval = 0;
 
-	if (!read_file_header(in, &hdr))
+	if (read_file_header(in, &hdr) < 0)
 		return -1;
 
 	if (hdr.method == 0)
@@ -134,17 +158,17 @@ static int arcfs_extract(FILE *in, FILE *out)
 
 	case 8:		/* "Crunched" [sic]
 			 * (RLE+9-to-12-bit dynamic LZW, a *bit* like GIF) */
-		orig_data = convert_lzw_dynamic(data, hdr.bits, 1,
+		orig_data = libxmp_convert_lzw_dynamic(data, hdr.bits, 1,
 					hdr.compressed_size, hdr.orig_size, 0);
 		break;
 
 	case 9:		/* "Squashed" (9-to-13-bit, no RLE) */
-		orig_data = convert_lzw_dynamic(data, hdr.bits, 0,
+		orig_data = libxmp_convert_lzw_dynamic(data, hdr.bits, 0,
 					hdr.compressed_size, hdr.orig_size, 0);
 		break;
 
 	case 127:	/* "Compress" (9-to-16-bit, no RLE) ("Spark" only) */
-		orig_data = convert_lzw_dynamic(data, hdr.bits, 0,
+		orig_data = libxmp_convert_lzw_dynamic(data, hdr.bits, 0,
 					hdr.compressed_size, hdr.orig_size, 0);
 		break;
 
@@ -169,7 +193,12 @@ static int arcfs_extract(FILE *in, FILE *out)
 	return exitval;
 }
 
-int decrunch_arcfs(FILE * f, FILE * fo)
+static int test_arcfs(unsigned char *b)
+{
+	return !memcmp(b, "Archive\0", 8);
+}
+
+static int decrunch_arcfs(FILE * f, FILE * fo)
 {
 	int ret;
 
@@ -182,3 +211,8 @@ int decrunch_arcfs(FILE * f, FILE * fo)
 
 	return 0;
 }
+
+struct depacker libxmp_depacker_arcfs = {
+	test_arcfs,
+	decrunch_arcfs
+};

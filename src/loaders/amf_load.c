@@ -1,13 +1,27 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 /* AMF loader written based on the format specs by Miodrag Vallat with
- * fixes by Andre Timmermans
+ * fixes by Andre Timmermans.
  *
  * The AMF format is the internal format used by DSMI, the DOS Sound and Music
  * Interface, which is the engine of DMP. As DMP was able to play more and more
@@ -22,7 +36,7 @@
 static int amf_test(HIO_HANDLE *, char *, const int);
 static int amf_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader amf_loader = {
+const struct format_loader libxmp_loader_amf = {
 	"DSMI Advanced Module Format",
 	amf_test,
 	amf_load
@@ -43,7 +57,7 @@ static int amf_test(HIO_HANDLE * f, char *t, const int start)
 	if (ver < 0x0a || ver > 0x0e)
 		return -1;
 
-	read_title(f, t, 32);
+	libxmp_read_title(f, t, 32);
 
 	return 0;
 }
@@ -65,12 +79,18 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	hio_read(buf, 1, 32, f);
 	strncpy(mod->name, (char *)buf, 32);
-	set_type(m, "DSMI %d.%d AMF", ver / 10, ver % 10);
+	libxmp_set_type(m, "DSMI %d.%d AMF", ver / 10, ver % 10);
 
 	mod->ins = hio_read8(f);
 	mod->len = hio_read8(f);
 	mod->trk = hio_read16l(f);
 	mod->chn = hio_read8(f);
+
+	/* Sanity check */
+	if (mod->ins == 0 || mod->len == 0 || mod->trk == 0
+		|| mod->chn == 0 || mod->chn > XMP_MAX_CHANNELS) {
+		return -1;
+	}
 
 	mod->smp = mod->ins;
 	mod->pat = mod->len;
@@ -88,6 +108,8 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	} else if (ver >= 0x0b) {
 		hio_read(buf, 1, 16, f);
 	}
+
+	m->c4rate = C4_NTSC_RATE;
 
 	MODULE_INFO();
  
@@ -108,15 +130,18 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	D_(D_INFO "Stored patterns: %d", mod->pat);
 
-	mod->xxp = calloc(sizeof(struct xmp_pattern *), mod->pat + 1);
+	mod->xxp = calloc(sizeof(struct xmp_pattern *), mod->pat);
 	if (mod->xxp == NULL)
 		return -1;
 
 	for (i = 0; i < mod->pat; i++) {
-		if (pattern_alloc(mod, i) < 0)
+		if (libxmp_alloc_pattern(mod, i) < 0)
 			return -1;
 
 		mod->xxp[i]->rows = ver >= 0x0e ? hio_read16l(f) : 64;
+
+		if (mod->xxp[i]->rows > 256)
+			return -1;
 
 		for (j = 0; j < mod->chn; j++) {
 			uint16 t = hio_read16l(f);
@@ -126,7 +151,7 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	/* Instruments */
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	/* Probe for 2-byte loop start 1.0 format
@@ -137,6 +162,9 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		uint8 b;
 		uint32 len, start, end;
 		long pos = hio_tell(f);
+		if (pos < 0) {
+			return -1;
+		}
 		for (i = 0; i < mod->ins; i++) {
 			b = hio_read8(f);
 			if (b != 0 && b != 1) {
@@ -179,13 +207,13 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		/*uint8 b;*/
 		int c2spd;
 
-		if (subinstrument_alloc(mod, i, 1) < 0)
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 			return -1;
 
 		/*b =*/ hio_read8(f);
 
 		hio_read(buf, 1, 32, f);
-		instrument_name(mod, i, buf, 32);
+		libxmp_instrument_name(mod, i, buf, 32);
 
 		hio_read(buf, 1, 13, f);	/* sample name */
 		hio_read32l(f);			/* sample index */
@@ -195,7 +223,7 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		mod->xxi[i].sub[0].pan = 0x80;
 		mod->xxs[i].len = hio_read32l(f);
 		c2spd = hio_read16l(f);
-		c2spd_to_note(c2spd, &mod->xxi[i].sub[0].xpo, &mod->xxi[i].sub[0].fin);
+		libxmp_c2spd_to_note(c2spd, &mod->xxi[i].sub[0].xpo, &mod->xxi[i].sub[0].fin);
 		mod->xxi[i].sub[0].vol = hio_read8(f);
 
 		/*
@@ -243,7 +271,6 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		t = hio_read16l(f);
 		trkmap[i] = t;
 		if (t > newtrk) newtrk = t;
-/*printf("%d -> %d\n", i, t);*/
 	}
 
 	for (i = 0; i < mod->pat; i++) {		/* read track table */
@@ -256,7 +283,6 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 			if (k < 0 || k >= mod->trk)
 				k = 0;
 			mod->xxp[i]->index[j] = trkmap[k];
-/*printf("mod->xxp[%d]->info[%d].index = %d (k = %d)\n", i, j, trkmap[k], k);*/
 		}
 	}
 
@@ -271,7 +297,7 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		return -1;
 
 	/* Alloc track 0 as empty track */
-	if (track_alloc(mod, 0, 64) < 0)
+	if (libxmp_alloc_track(mod, 0, 64) < 0)
 		return -1;
 
 	/* Alloc rest of the tracks */
@@ -279,20 +305,22 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		uint8 t1, t2, t3;
 		int size;
 
-		if (track_alloc(mod, i, 64) < 0)
+		if (libxmp_alloc_track(mod, i, 64) < 0)	/* FIXME! */
 			return -1;
 
 		size = hio_read24l(f);
-/*printf("TRACK %d SIZE %d\n", i, size);*/
 
 		for (j = 0; j < size; j++) {
 			t1 = hio_read8(f);			/* row */
 			t2 = hio_read8(f);			/* type */
 			t3 = hio_read8(f);			/* parameter */
-/*printf("track %d row %d: %02x %02x %02x\n", i, t1, t1, t2, t3);*/
 
 			if (t1 == 0xff && t2 == 0xff && t3 == 0xff)
 				break;
+
+			/* Sanity check */
+			if (t1 >= mod->xxt[i]->rows)
+				return -1;
 
 			event = &mod->xxt[i]->event[t1];
 
@@ -301,6 +329,12 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 					event->note = t2 + 1;
 				event->vol = t3;
 			} else if (t2 == 0x7f) {	/* copy previous */
+
+				/* Sanity check */
+				if (t1 == 0) {
+					return -1;
+				}
+
 				memcpy(event, &mod->xxt[i]->event[t1 - 1],
 					sizeof(struct xmp_event));
 			} else if (t2 == 0x80) {	/* instrument */
@@ -458,7 +492,6 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 				event->fxt = fxt;
 				event->fxp = fxp;
 			}
-
 		}
 	}
 
@@ -468,7 +501,7 @@ static int amf_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	D_(D_INFO "Stored samples: %d", mod->smp);
 
 	for (i = 0; i < mod->ins; i++) {
-		if (load_sample(m, f, SAMPLE_FLAG_UNS, &mod->xxs[i], NULL) < 0)
+		if (libxmp_load_sample(m, f, SAMPLE_FLAG_UNS, &mod->xxs[i], NULL) < 0)
 			return -1;
 	}
 

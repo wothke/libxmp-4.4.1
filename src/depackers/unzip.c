@@ -19,6 +19,7 @@ Michael Kohn <mike@mikekohn.net>
 #include <time.h>
 #include <unistd.h>
 #include "common.h"
+#include "depacker.h"
 #include "inflate.h"
 #include "crc32.h"
 
@@ -41,8 +42,8 @@ struct zip_file_header
 
 #define QUIET
 
-#define read_int(x) read32l(x)
-#define read_word(x) read16l(x)
+#define read_int(x) read32l(x, NULL)
+#define read_word(x) read16l(x, NULL)
 
 /*-------------------------- fileio.c ---------------------------*/
 
@@ -53,7 +54,11 @@ int t;
 
   for (t=0; t<count; t++)
   {
-    s[t]=getc(in);
+    int x = getc(in);
+    if (x < 0) {
+      return -1;
+    }
+    s[t]=x;
   }
 
   s[t]=0;
@@ -111,7 +116,7 @@ int t,r;
 
     read_buffer(in,buffer,r);
     write_buffer(out,buffer,r);
-    checksum=crc32_A2(buffer,r,checksum);
+    checksum=libxmp_crc32_A2(buffer,r,checksum);
     t=t+r;
   }
 
@@ -162,12 +167,15 @@ struct inflate_data data;
   if (header.extra_field == NULL)
     goto err2;
 
-  read_chars(in,header.file_name,header.file_name_length);
-  read_chars(in,(char *)header.extra_field,header.extra_field_length);
+  if (read_chars(in,header.file_name,header.file_name_length) < 0)
+    goto err2;
+
+  if (read_chars(in,(char *)header.extra_field,header.extra_field_length) < 0)
+    goto err2;
 
   marker=ftell(in);
 
-  crc32_init_A();
+  libxmp_crc32_init_A();
 
   if (header.uncompressed_size!=0)
   {
@@ -177,7 +185,7 @@ struct inflate_data data;
     }
     else
     {
-      if (inflate(in, out, &checksum, 1) < 0)
+      if (libxmp_inflate(in, out, &checksum, 1) < 0)
 	goto err3;
     }
 
@@ -193,7 +201,9 @@ struct inflate_data data;
   free(header.file_name);
   free(header.extra_field);
 
-  fseek(in,marker+header.compressed_size,SEEK_SET);
+  if (fseek(in,marker+header.compressed_size,SEEK_SET) < 0) {
+    goto err;
+  }
 
   if ((header.general_purpose_bit_flag&8)!=0)
   {
@@ -223,30 +233,44 @@ char name[1024];
   while(1)
   {
     curr=ftell(in);
+    if (curr < 0) {
+      return -1;
+    }
     i=read_zip_header(in,&header);
     if (i==-1) break;
 
     /*if (skip_offset<0 || curr>skip_offset)*/
     {
       marker=ftell(in);  /* nasty code.. please make it nice later */
+      if (marker < 0) {
+        return -1;
+      }
 
       name_size = header.file_name_length;
       if (name_size > 1023) {
 	name_size = 1023;
       }
-      read_chars(in,name,name_size);
+
+      if (read_chars(in,name,name_size) < 0) {
+        return -1;
+      }
+
       name[name_size]=0;
 
-      fseek(in,marker,SEEK_SET); /* and part 2 of nasty code */
+      if (fseek(in,marker,SEEK_SET) < 0) { /* and part 2 of nasty code */
+        return -1;
+      }
 
-      if (!exclude_match(name)) {
+      if (!libxmp_exclude_match(name)) {
         break;
       }
     }
 
-    fseek(in,header.compressed_size+
+    if (fseek(in,header.compressed_size+
              header.file_name_length+
-             header.extra_field_length,SEEK_CUR);
+             header.extra_field_length,SEEK_CUR) < 0) {
+      return -1;
+    }
   }
 
   if (i!=-1)
@@ -255,7 +279,14 @@ char name[1024];
   { return -1; }
 }
 
-int decrunch_zip(FILE *in, FILE *out)
+static int test_zip(unsigned char *b)
+{
+	return b[0] == 'P' && b[1] == 'K' &&
+		((b[2] == 3 && b[3] == 4) || (b[2] == '0' && b[3] == '0' &&
+		b[4] == 'P' && b[5] == 'K' && b[6] == 3 && b[7] == 4));
+}
+
+static int decrunch_zip(FILE *in, FILE *out)
 {
   int offset;
 
@@ -263,10 +294,16 @@ int decrunch_zip(FILE *in, FILE *out)
   if (offset < 0)
     return -1;
 
-  fseek(in, offset, SEEK_SET);
+  if (fseek(in, offset, SEEK_SET) < 0)
+    return -1;
 
   if (kunzip_file_with_name(in,out) < 0)
-     return -1;
+    return -1;
 
   return 0;
 }
+
+struct depacker libxmp_depacker_zip = {
+	test_zip,
+	decrunch_zip
+};

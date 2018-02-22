@@ -1,8 +1,9 @@
 /*
  * ProRunner1.c   Copyright (C) 1996 Asle / ReDoX
- *                Copyright (C) 2006-2007 Claudio Matsuoka
  *
  * Converts MODs packed with Prorunner v1.0
+ *
+ * Modified in 2006,2007,2014 by Claudio Matsuoka
  */
 
 #include <string.h>
@@ -10,7 +11,7 @@
 #include "prowiz.h"
 
 
-static int depack_pru1 (FILE *in, FILE *out)
+static int depack_pru1 (HIO_HANDLE *in, FILE *out)
 {
 	uint8 header[2048];
 	uint8 c1, c2, c3, c4;
@@ -23,7 +24,7 @@ static int depack_pru1 (FILE *in, FILE *out)
 	memset(ptable, 0, 128);
 
 	/* read and write whole header */
-	fread(header, 950, 1, in);
+	hio_read(header, 950, 1, in);
 	fwrite(header, 950, 1, out);
 
 	/* get whole sample size */
@@ -32,12 +33,12 @@ static int depack_pru1 (FILE *in, FILE *out)
 	}
 
 	/* read and write size of pattern list */
-	write8(out, npat = read8(in));
+	write8(out, npat = hio_read8(in));
 
 	memset(header, 0, 2048);
 
 	/* read and write ntk byte and pattern list */
-	fread(header, 129, 1, in);
+	hio_read(header, 129, 1, in);
 	fwrite(header, 129, 1, out);
 
 	/* write ID */
@@ -51,13 +52,19 @@ static int depack_pru1 (FILE *in, FILE *out)
 	}
 
 	/* pattern data */
-	fseek (in, 1084, SEEK_SET);
+	hio_seek(in, 1084, SEEK_SET);
 	for (i = 0; i <= max; i++) {
 		for (j = 0; j < 256; j++) {
-			header[0] = read8(in);
-			header[1] = read8(in);
-			header[2] = read8(in);
-			header[3] = read8(in);
+			header[0] = hio_read8(in);
+			header[1] = hio_read8(in);
+			header[2] = hio_read8(in);
+			header[3] = hio_read8(in);
+
+			/* Sanity check */
+			if (header[1] >= 37) {
+				return -1;
+			}
+
 			c1 = header[0] & 0xf0;
 			c3 = (header[0] & 0x0f) << 4;
 			c3 |= header[2];
@@ -79,20 +86,17 @@ static int depack_pru1 (FILE *in, FILE *out)
 
 static int test_pru1(uint8 *data, char *t, int s)
 {
-	int start = 0;
+	PW_REQUEST_DATA(s, 1084);
 
-	PW_REQUEST_DATA(s, 1080);
-
-	if (data[1080] != 'S' || data[1081] != 'N' ||
-		data[1082] != 'T' || data[1083] != '.')
+	if (readmem32b(data + 1080) != 0x534e542e)	/* "SNT." */
 		return -1;
 
 	/* test 2 */
-	if (data[start + 951] != 0x7f)
+	if (data[951] != 0x7f)
 		return -1;
 
 	/* test 3 */
-	if (data[start + 950] > 0x7f)
+	if (data[950] > 0x7f)
 		return -1;
 
 	pw_read_title(data, t, 20);

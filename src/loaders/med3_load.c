@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -34,7 +34,7 @@
 static int med3_test(HIO_HANDLE *, char *, const int);
 static int med3_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader med3_loader = {
+const struct format_loader libxmp_loader_med3 = {
 	"MED 2.00 MED3",
 	med3_test,
 	med3_load
@@ -45,7 +45,7 @@ static int med3_test(HIO_HANDLE *f, char *t, const int start)
 	if (hio_read32b(f) !=  MAGIC_MED3)
 		return -1;
 
-	read_title(f, t, 0);
+	libxmp_read_title(f, t, 0);
 
 	return 0;
 }
@@ -70,7 +70,7 @@ static int med3_test(HIO_HANDLE *f, char *t, const int start)
 
 static uint8 get_nibble(uint8 *mem, uint16 *nbnum)
 {
-	uint8 *mloc = mem + (*nbnum / 2),res;
+	uint8 *mloc = mem + (*nbnum / 2), res;
 
 	if(*nbnum & 0x1)
 		res = *mloc & 0x0f;
@@ -81,19 +81,19 @@ static uint8 get_nibble(uint8 *mem, uint16 *nbnum)
 	return res;
 }
 
-static uint16 get_nibbles(uint8 *mem,uint16 *nbnum,uint8 nbs)
+static uint16 get_nibbles(uint8 *mem, uint16 *nbnum, uint8 nbs)
 {
 	uint16 res = 0;
 
 	while (nbs--) {
 		res <<= 4;
-		res |= get_nibble(mem,nbnum);
+		res |= get_nibble(mem, nbnum);
 	}
 
 	return res;
 }
 
-static int unpack_block(struct module_data *m, uint16 bnum, uint8 *from)
+static int unpack_block(struct module_data *m, uint16 bnum, uint8 *from, uint16 convsz)
 {
 	struct xmp_module *mod = &m->mod;
 	struct xmp_event *event;
@@ -107,8 +107,9 @@ static int unpack_block(struct module_data *m, uint16 bnum, uint8 *from)
 
 	/*from += 16;*/
 	patbuf = to = calloc(3, 4 * 64);
-	if (to == NULL)
-		return -1;
+	if (to == NULL) {
+		goto err;
+	}
 
 	for (i = 0; i < 64; i++) {
 		if (i == 32) {
@@ -117,6 +118,11 @@ static int unpack_block(struct module_data *m, uint16 bnum, uint8 *from)
 		}
 
 		if (*lmptr & MASK) {
+			if (trkn / 2 > convsz) {
+				goto err2;
+			}	
+			convsz -= trkn / 2;
+
 			lmsk = get_nibbles(fromst, &fromn, (uint8)(trkn / 4));
 			lmsk <<= (16 - trkn);
 			tmpto = to;
@@ -134,6 +140,11 @@ static int unpack_block(struct module_data *m, uint16 bnum, uint8 *from)
 		}
 
 		if (*fxptr & MASK) {
+			if (trkn / 2 > convsz) {
+				goto err2;
+			}	
+			convsz -= trkn / 2;
+
 			lmsk = get_nibbles(fromst,&fromn,(uint8)(trkn / 4));
 			lmsk <<= (16 - trkn);
 			tmpto = to;
@@ -212,6 +223,11 @@ static int unpack_block(struct module_data *m, uint16 bnum, uint8 *from)
 	free(patbuf);
 
 	return 0;
+
+     err2:
+	free(patbuf);
+     err:
+	return -1;
 }
 
 
@@ -226,11 +242,11 @@ static int med3_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	hio_read32b(f);
 
-	set_type(m, "MED 2.00 MED3");
+	libxmp_set_type(m, "MED 2.00 MED3");
 
 	mod->ins = mod->smp = 32;
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	/* read instrument names */
@@ -242,8 +258,8 @@ static int med3_load(struct module_data *m, HIO_HANDLE *f, const int start)
 			if (c == 0)
 				break;
 		}
-		instrument_name(mod, i, buf, 32);
-		if (subinstrument_alloc(mod, i, 1) < 0)
+		libxmp_instrument_name(mod, i, buf, 32);
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 			return -1;
 	}
 
@@ -276,6 +292,11 @@ static int med3_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	mod->trk = mod->chn * mod->pat;
 
 	mod->len = hio_read16b(f);
+
+	/* Sanity check */
+	if (mod->len > 256 || mod->pat > 256)
+		return -1;
+
 	hio_read(mod->xxo, 1, mod->len, f);
 	mod->spd = hio_read16b(f);
 	if (mod->spd > 10) {
@@ -313,7 +334,7 @@ static int med3_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	for (i = 0; i < 32; i++)
 		mod->xxi[i].sub[0].xpo = transp;
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	/* Load and convert patterns */
@@ -324,7 +345,7 @@ static int med3_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		uint8 b, tracks;
 		uint16 convsz;
 
-		if (pattern_tracks_alloc(mod, i, 64) < 0)
+		if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 			return -1;
 
 		tracks = hio_read8(f);
@@ -363,9 +384,12 @@ static int med3_load(struct module_data *m, HIO_HANDLE *f, const int start)
                 else
 			*(conv + 3) = hio_read32b(f);
 
-		hio_read(conv + 4, 1, convsz, f);
+		if (hio_read(conv + 4, 1, convsz, f) != convsz) {
+			free(conv);
+			return -1;
+		}
 
-                if (unpack_block(m, i, (uint8 *)conv) < 0) {
+                if (unpack_block(m, i, (uint8 *)conv, convsz) < 0) {
 			free(conv);
 			return -1;
 		}
@@ -397,7 +421,7 @@ static int med3_load(struct module_data *m, HIO_HANDLE *f, const int start)
 			mod->xxs[i].flg & XMP_SAMPLE_LOOP ? 'L' : ' ',
 			mod->xxi[i].sub[0].vol);
 
-		if (load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
+		if (libxmp_load_sample(m, f, 0, &mod->xxs[i], NULL) < 0)
 			return -1;
 	}
 

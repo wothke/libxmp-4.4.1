@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 #include "loader.h"
@@ -17,7 +31,7 @@
 static int no_test (HIO_HANDLE *, char *, const int);
 static int no_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader no_loader = {
+const struct format_loader libxmp_loader_no = {
 	"Liquid Tracker NO",
 	no_test,
 	no_load
@@ -25,10 +39,41 @@ const struct format_loader no_loader = {
 
 static int no_test(HIO_HANDLE *f, char *t, const int start)
 {
+	int nsize, pat, chn;
+	int i;
+
+	hio_seek(f, start, SEEK_CUR);
+
 	if (hio_read32b(f) != 0x4e4f0000)		/* NO 0x00 0x00 */
 		return -1;
 
-	read_title(f, t, hio_read8(f));
+	nsize = hio_read8(f);
+	if (nsize != 20)
+		return -1;
+
+	/* test title */
+	for (i = 0; i < nsize; i++) {
+		if (hio_read8(f) == 0)
+			return -1;
+	}
+
+	hio_seek(f, 9, SEEK_CUR);
+
+	/* test number of patterns */
+	pat = hio_read8(f);
+	if (pat == 0)
+		return -1;
+
+	hio_read8(f);
+
+	/* test number of channels */
+	chn = hio_read8(f);
+	if (chn <= 0 || chn > 16)
+		return -1;
+
+	hio_seek(f, start + 5, SEEK_SET);
+
+	libxmp_read_title(f, t, nsize);
 
 	return 0;
 }
@@ -64,7 +109,7 @@ static int no_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	hio_read32b(f);			/* NO 0x00 0x00 */
 
-	set_type(m, "Liquid Tracker");
+	libxmp_set_type(m, "Liquid Tracker");
 
 	nsize = hio_read8(f);
 	for (i = 0; i < nsize; i++) {
@@ -97,19 +142,25 @@ static int no_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	hio_seek(f, 255 - i, SEEK_CUR);
 	mod->len = i;
 
+	m->c4rate = C4_NTSC_RATE;
+
 	MODULE_INFO();
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	/* Read instrument names */
 	for (i = 0; i < mod->ins; i++) {
 		int hasname, c2spd;
 
-		if (subinstrument_alloc(mod, i, 1) < 0)
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 			return -1;
 
 		nsize = hio_read8(f);
+		if (hio_error(f)) {
+			return -1;
+		}
+
 		hasname = 0;
 		for (j = 0; j < nsize; j++) {
 			uint8 x = hio_read8(f);
@@ -149,18 +200,17 @@ static int no_load(struct module_data *m, HIO_HANDLE *f, const int start)
 				mod->xxs[i].flg & XMP_SAMPLE_LOOP ? 'L' : ' ',
 				mod->xxi[i].sub[0].vol, c2spd);
 
-		c2spd = 8363 * c2spd / 8448;
-		c2spd_to_note(c2spd, &mod->xxi[i].sub[0].xpo, &mod->xxi[i].sub[0].fin);
+		libxmp_c2spd_to_note(c2spd, &mod->xxi[i].sub[0].xpo, &mod->xxi[i].sub[0].fin);
 	}
 
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	/* Read and convert patterns */
 	D_(D_INFO "Stored patterns: %d ", mod->pat);
 
 	for (i = 0; i < mod->pat; i++) {
-		if (pattern_tracks_alloc(mod, i, 64) < 0)
+		if (libxmp_alloc_pattern_tracks(mod, i, 64) < 0)
 			return -1;
 
 		for (j = 0; j < mod->xxp[i]->rows; j++) {
@@ -196,7 +246,7 @@ static int no_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	for (i = 0; i < mod->ins; i++) {
 		if (mod->xxs[i].len == 0)
 			continue;
-		if (load_sample(m, f, SAMPLE_FLAG_UNS, &mod->xxs[i], NULL) < 0)
+		if (libxmp_load_sample(m, f, SAMPLE_FLAG_UNS, &mod->xxs[i], NULL) < 0)
 			return -1;
 	}
 

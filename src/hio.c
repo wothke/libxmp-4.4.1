@@ -1,5 +1,5 @@
-/* Extended Module Player core player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -22,148 +22,258 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#ifndef LIBXMP_CORE_PLAYER
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#endif
 #include <limits.h>
 #include <errno.h>
 #include "common.h"
 #include "hio.h"
 #include "mdataio.h"
 
+static long get_size(FILE *f)
+{
+	long size, pos;
+
+	pos = ftell(f);
+	if (pos >= 0) {
+		if (fseek(f, 0, SEEK_END) < 0) {
+			return -1;
+		}
+		size = ftell(f);
+		if (fseek(f, pos, SEEK_SET) < 0) {
+			return -1;
+		}
+		return size;
+	} else {
+		return pos;
+	}
+}
 
 int8 hio_read8s(HIO_HANDLE *h)
 {
+	int err;
+	int8 ret = 0;
+
 	switch (HIO_HANDLE_TYPE(h)) {
 	case HIO_HANDLE_TYPE_FILE:
-		return read8s(h->handle.file);
+		ret = read8s(h->handle.file, &err);
+		if (err != 0) {
+			h->error = err;
+		}
+		break;
 	case HIO_HANDLE_TYPE_MEMORY:
-		return mread8s(h->handle.mem);
-	default:
-		return 0;
+		ret = mread8s(h->handle.mem);
+		break;
 	}
+
+	return ret;
 }
 
 uint8 hio_read8(HIO_HANDLE *h)
 {
+	int err;
+	uint8 ret = 0;
+
 	switch (HIO_HANDLE_TYPE(h)) {
 	case HIO_HANDLE_TYPE_FILE:
-		return read8(h->handle.file);
+		ret = read8(h->handle.file, &err);
+		if (err != 0) {
+			h->error = err;
+		}
+		break;
 	case HIO_HANDLE_TYPE_MEMORY:
-		return mread8(h->handle.mem);
-	default:
-		return 0;
+		ret = mread8(h->handle.mem);
+		break;
 	}
+
+	return ret;
 }
 
 uint16 hio_read16l(HIO_HANDLE *h)
 {
+	int err;
+	uint16 ret = 0;
+
 	switch (HIO_HANDLE_TYPE(h)) {
 	case HIO_HANDLE_TYPE_FILE:
-		return read16l(h->handle.file);
+		ret = read16l(h->handle.file, &err);
+		if (err != 0) {
+			h->error = err;
+		}
+		break;
 	case HIO_HANDLE_TYPE_MEMORY:
-		return mread16l(h->handle.mem);
-	default:
-		return 0;
+		ret = mread16l(h->handle.mem);
+		break;
 	}
+
+	return ret;
 }
 
 uint16 hio_read16b(HIO_HANDLE *h)
 {
+	int err;
+	uint16 ret = 0;
+
 	switch (HIO_HANDLE_TYPE(h)) {
 	case HIO_HANDLE_TYPE_FILE:
-		return read16b(h->handle.file);
+		ret = read16b(h->handle.file, &err);
+		if (err != 0) {
+			h->error = err;
+		}
+		break;
 	case HIO_HANDLE_TYPE_MEMORY:
-		return mread16b(h->handle.mem);
-	default:
-		return 0;
+		ret = mread16b(h->handle.mem);
+		break;
 	}
+
+	return ret;
 }
 
 uint32 hio_read24l(HIO_HANDLE *h)
 {
+	int err;
+	uint32 ret = 0;
+
 	switch (HIO_HANDLE_TYPE(h)) {
 	case HIO_HANDLE_TYPE_FILE:
-		return read24l(h->handle.file); 
+		ret = read24l(h->handle.file, &err); 
+		if (err != 0) {
+			h->error = err;
+		}
+		break;
 	case HIO_HANDLE_TYPE_MEMORY:
-		return mread24l(h->handle.mem); 
-	default:
-		return 0;
+		ret = mread24l(h->handle.mem); 
+		break;
 	}
+
+	return ret;
 }
 
 uint32 hio_read24b(HIO_HANDLE *h)
 {
+	int err;
+	uint32 ret = 0;
+
 	switch (HIO_HANDLE_TYPE(h)) {
 	case HIO_HANDLE_TYPE_FILE:
-		return read24b(h->handle.file);
+		ret = read24b(h->handle.file, &err);
+		if (err != 0) {
+			h->error = err;
+		}
+		break;
 	case HIO_HANDLE_TYPE_MEMORY:
-		return mread24b(h->handle.mem);
-	default:
-		return 0;
+		ret = mread24b(h->handle.mem);
+		break;
 	}
+
+	return ret;
 }
 
 uint32 hio_read32l(HIO_HANDLE *h)
 {
+	int err;
+	uint32 ret = 0;
+
 	switch (HIO_HANDLE_TYPE(h)) {
 	case HIO_HANDLE_TYPE_FILE:
-		return read32l(h->handle.file);
+		ret = read32l(h->handle.file, &err);
+		if (err != 0) {
+			h->error = err;
+		}
+		break;
 	case HIO_HANDLE_TYPE_MEMORY:
-		return mread32l(h->handle.mem);
-	default:
-		return 0;
+		ret = mread32l(h->handle.mem);
+		break;
 	}
+
+	return ret;
 }
 
 uint32 hio_read32b(HIO_HANDLE *h)
 {
+	int err;
+	uint32 ret = 0;
+
 	switch (HIO_HANDLE_TYPE(h)) {
 	case HIO_HANDLE_TYPE_FILE:
-		return read32b(h->handle.file);
+		ret = read32b(h->handle.file, &err);
+		if (err != 0) {
+			h->error = err;
+		}
+		break;
 	case HIO_HANDLE_TYPE_MEMORY:
-		return mread32b(h->handle.mem);
-	default:
-		return 0;
+		ret = mread32b(h->handle.mem);
 	}
+
+	return ret;
 }
 
 size_t hio_read(void *buf, size_t size, size_t num, HIO_HANDLE *h)
 {
+	size_t ret = 0;
+
 	switch (HIO_HANDLE_TYPE(h)) {
 	case HIO_HANDLE_TYPE_FILE:
-		return fread(buf, size, num, h->handle.file);
+		ret = fread(buf, size, num, h->handle.file);
+		if (ret != num) {
+			if (ferror(h->handle.file)) {
+				h->error = errno;
+			} else {
+				h->error = feof(h->handle.file) ? EOF : -2;
+			}
+		}
+		break;
 	case HIO_HANDLE_TYPE_MEMORY:
-		return mread(buf, size, num, h->handle.mem);
-	default:
-		return 0;
+		ret = mread(buf, size, num, h->handle.mem);
+		if (ret != num) {
+			h->error = errno;
+		}
+		break;
 	}
+
+	return ret;
 }
 
 int hio_seek(HIO_HANDLE *h, long offset, int whence)
 {
+	int ret = -1;
+
 	switch (HIO_HANDLE_TYPE(h)) {
 	case HIO_HANDLE_TYPE_FILE:
-		return fseek(h->handle.file, offset, whence);
+		ret = fseek(h->handle.file, offset, whence);
+		if (ret < 0) {
+			h->error = errno;
+		}
+		break;
 	case HIO_HANDLE_TYPE_MEMORY:
-		return mseek(h->handle.mem, offset, whence);
-	default:
-		return -1;
+		ret = mseek(h->handle.mem, offset, whence);
+		if (ret < 0) {
+			h->error = errno;
+		}
+		break;
 	}
+
+	return ret;
 }
 
 long hio_tell(HIO_HANDLE *h)
 {
+	long ret = -1;
+
 	switch (HIO_HANDLE_TYPE(h)) {
 	case HIO_HANDLE_TYPE_FILE:
-		return ftell(h->handle.file);
+		ret = ftell(h->handle.file);
+		if (ret < 0) {
+			h->error = errno;
+		}
+		break;
 	case HIO_HANDLE_TYPE_MEMORY:
-		return mtell(h->handle.mem);
-	default:
-		return -1;
+		ret = mtell(h->handle.mem);
+		if (ret < 0) {
+			h->error = errno;
+		}
+		break;
 	}
+
+	return ret;
 }
 
 int hio_eof(HIO_HANDLE *h)
@@ -178,6 +288,13 @@ int hio_eof(HIO_HANDLE *h)
 	}
 }
 
+int hio_error(HIO_HANDLE *h)
+{
+	int error = h->error;
+	h->error = 0;
+	return error;
+}
+
 HIO_HANDLE *hio_open(void *path, char *mode)
 {
 	HIO_HANDLE *h;
@@ -186,13 +303,20 @@ HIO_HANDLE *hio_open(void *path, char *mode)
 	if (h == NULL)
 		goto err;
 	
+	h->error = 0;
 	h->type = HIO_HANDLE_TYPE_FILE;
 	h->handle.file = fopen(path, mode);
 	if (h->handle.file == NULL)
 		goto err2;
 
+	h->size = get_size(h->handle.file);
+	if (h->size < 0)
+		goto err3;
+
 	return h;
 
+    err3:
+	fclose(h->handle.file);
     err2:
 	free(h);
     err:
@@ -207,8 +331,10 @@ HIO_HANDLE *hio_open_mem(void *ptr, long size)
 	if (h == NULL)
 		return NULL;
 	
+	h->error = 0;
 	h->type = HIO_HANDLE_TYPE_MEMORY;
 	h->handle.mem = mopen(ptr, size);
+	h->size = size;
 
 	return h;
 }
@@ -221,8 +347,10 @@ HIO_HANDLE *hio_open_file(FILE *f)
 	if (h == NULL)
 		return NULL;
 	
+	h->error = 0;
 	h->type = HIO_HANDLE_TYPE_FILE;
-	h->handle.file = fdopen(fileno(f), "rb");
+	h->handle.file = f /*fdopen(fileno(f), "rb")*/;
+	h->size = get_size(f);
 
 	return h;
 }
@@ -246,37 +374,7 @@ int hio_close(HIO_HANDLE *h)
 	return ret;
 }
 
-#ifndef LIBXMP_CORE_PLAYER
-
-HIO_HANDLE *hio_open_fd(int fd, char *mode)
+long hio_size(HIO_HANDLE *h)
 {
-	HIO_HANDLE *h;
-	
-	h = (HIO_HANDLE *)malloc(sizeof (HIO_HANDLE));
-	if (h == NULL)
-		return NULL;
-	
-	h->type = HIO_HANDLE_TYPE_FILE;
-	h->handle.file = fdopen(fd, mode);
-	if (h->handle.file == NULL) {
-		free(h);
-		return NULL;
-	}
-
-	return h;
+	return h->size;
 }
-
-int hio_stat(HIO_HANDLE *h, struct stat *st)
-{
-	switch (HIO_HANDLE_TYPE(h)) {
-	case HIO_HANDLE_TYPE_FILE:
-		return fstat(fileno(h->handle.file), st);
-	case HIO_HANDLE_TYPE_MEMORY:
-		return mstat(h->handle.mem, st);
-	default:
-		return -1;
-	}
-}
-
-#endif
-

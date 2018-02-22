@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -31,7 +31,7 @@
 static int okt_test(HIO_HANDLE *, char *, const int);
 static int okt_load(struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader okt_loader = {
+const struct format_loader libxmp_loader_okt = {
 	"Oktalyzer",
 	okt_test,
 	okt_load
@@ -47,7 +47,7 @@ static int okt_test(HIO_HANDLE *f, char *t, const int start)
 	if (strncmp(magic, "OKTASONG", 8))
 		return -1;
 
-	read_title(f, t, 0);
+	libxmp_read_title(f, t, 0);
 
 	return 0;
 }
@@ -79,15 +79,15 @@ static const int fx[] = {
 	FX_OKT_ARP3,		/* 10 */
 	FX_OKT_ARP4,		/* 11 */
 	FX_OKT_ARP5,		/* 12 */
-	FX_NSLIDE_DN,		/* 13 */
+	FX_NSLIDE2_DN,		/* 13 */
 	NONE,
 	NONE,			/* 15 - filter */
 	NONE,
-	FX_NSLIDE_UP,		/* 17 */
+	FX_NSLIDE2_UP,		/* 17 */
 	NONE,
 	NONE,
 	NONE,
-	FX_F_NSLIDE_DN,		/* 21 */
+	FX_NSLIDE_DN,		/* 21 */
 	NONE,
 	NONE,
 	NONE,
@@ -96,22 +96,29 @@ static const int fx[] = {
 	NONE,			/* 27 - release */
 	FX_SPEED,		/* 28 */
 	NONE,
-	FX_F_NSLIDE_UP,		/* 30 */
+	FX_NSLIDE_UP,		/* 30 */
 	FX_VOLSET		/* 31 */
 };
 
 static int get_cmod(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 {
 	struct xmp_module *mod = &m->mod;
-	int i, j, k;
+	int i;
 
 	mod->chn = 0;
 	for (i = 0; i < 4; i++) {
-		j = hio_read16b(f);
-		for (k = ! !j; k >= 0; k--) {
-			mod->xxc[mod->chn].pan = (((i + 1) / 2) % 2) * 0xff;
-			mod->chn++;
+		int pan = (((i + 1) / 2) % 2) * 0xff;
+		int p = 0x80 + (pan - 0x80) * m->defpan / 100;
+
+		if (hio_read16b(f) == 0) {
+			mod->xxc[mod->chn++].pan = p;
+		} else {
+			mod->xxc[mod->chn].flg |= XMP_CHANNEL_SPLIT | (i << 4);
+			mod->xxc[mod->chn++].pan = p;
+			mod->xxc[mod->chn].flg |= XMP_CHANNEL_SPLIT | (i << 4);
+			mod->xxc[mod->chn++].pan = p;
 		}
+
 	}
 
 	return 0;
@@ -124,11 +131,15 @@ static int get_samp(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	int i, j;
 	int looplen;
 
+	/* Sanity check */
+	if (size != 36 * 32)
+		return -1;
+
 	/* Should be always 36 */
 	mod->ins = size / 32;	/* sizeof(struct okt_instrument_header); */
 	mod->smp = mod->ins;
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	for (j = i = 0; i < mod->ins; i++) {
@@ -136,18 +147,17 @@ static int get_samp(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 		struct xmp_sample *xxs = &mod->xxs[j];
 		struct xmp_subinstrument *sub;
 
-		if (subinstrument_alloc(mod, i, 1) < 0)
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 			return -1;
 
 		sub = &xxi->sub[0];
 
 		hio_read(xxi->name, 1, 20, f);
-		adjust_string((char *)xxi->name);
 
 		/* Sample size is always rounded down */
 		xxs->len = hio_read32b(f) & ~1;
-		xxs->lps = hio_read16b(f);
-		looplen = hio_read16b(f);
+		xxs->lps = hio_read16b(f) << 1;
+		looplen = hio_read16b(f) << 1;
 		xxs->lpe = xxs->lps + looplen;
 		xxs->flg = looplen > 2 ? XMP_SAMPLE_LOOP : 0;
 
@@ -193,6 +203,11 @@ static int get_plen(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 	struct xmp_module *mod = &m->mod;
 
 	mod->len = hio_read16b(f);
+
+	/* Sanity check */
+	if (mod->len > 256)
+		return -1;
+
 	D_(D_INFO "Module length: %d", mod->len);
 
 	return 0;
@@ -202,7 +217,8 @@ static int get_patt(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 {
 	struct xmp_module *mod = &m->mod;
 
-	hio_read(mod->xxo, 1, mod->len, f);
+	if (hio_read(mod->xxo, 1, mod->len, f) != mod->len)
+		return -1;
 
 	return 0;
 }
@@ -219,18 +235,18 @@ static int get_pbod(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 		return 0;
 
 	if (!data->pattern) {
-		if (pattern_init(mod) < 0)
+		if (libxmp_init_pattern(mod) < 0)
 			return -1;
 		D_(D_INFO "Stored patterns: %d", mod->pat);
 	}
 
 	rows = hio_read16b(f);
 
-	if (pattern_tracks_alloc(mod, data->pattern, rows) < 0)
+	if (libxmp_alloc_pattern_tracks(mod, data->pattern, rows) < 0)
 		return -1;
 
 	for (j = 0; j < rows * mod->chn; j++) {
-		uint8 note, ins;
+		uint8 note, ins, fxt;
 
 		e = &EVENT(data->pattern, j % mod->chn, j / mod->chn);
 		memset(e, 0, sizeof(struct xmp_event));
@@ -243,7 +259,11 @@ static int get_pbod(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 			e->ins = 1 + ins;
 		}
 
-		e->fxt = fx[hio_read8(f)];
+		fxt = hio_read8(f);
+		if (fxt >= 32) {
+			return -1;
+		}
+		e->fxt = fx[fxt];
 		e->fxp = hio_read8(f);
 
 		if ((e->fxt == FX_VOLSET) && (e->fxp > 0x40)) {
@@ -288,7 +308,7 @@ static int get_sbod(struct module_data *m, int size, HIO_HANDLE *f, void *parm)
 		flags = SAMPLE_FLAG_7BIT;
 
 	sid = mod->xxi[i].sub[0].sid;
-	if (load_sample(m, f, flags, &mod->xxs[sid], NULL) < 0)
+	if (libxmp_load_sample(m, f, flags, &mod->xxs[sid], NULL) < 0)
 		return -1;
 
 	data->sample++;
@@ -306,36 +326,38 @@ static int okt_load(struct module_data *m, HIO_HANDLE * f, const int start)
 
 	hio_seek(f, 8, SEEK_CUR);	/* OKTASONG */
 
-	handle = iff_new();
+	handle = libxmp_iff_new();
 	if (handle == NULL)
 		return -1;
 
 	memset(&data, 0, sizeof(struct local_data));
 
 	/* IFF chunk IDs */
-	ret = iff_register(handle, "CMOD", get_cmod);
-	ret |= iff_register(handle, "SAMP", get_samp);
-	ret |= iff_register(handle, "SPEE", get_spee);
-	ret |= iff_register(handle, "SLEN", get_slen);
-	ret |= iff_register(handle, "PLEN", get_plen);
-	ret |= iff_register(handle, "PATT", get_patt);
-	ret |= iff_register(handle, "PBOD", get_pbod);
-	ret |= iff_register(handle, "SBOD", get_sbod);
+	ret = libxmp_iff_register(handle, "CMOD", get_cmod);
+	ret |= libxmp_iff_register(handle, "SAMP", get_samp);
+	ret |= libxmp_iff_register(handle, "SPEE", get_spee);
+	ret |= libxmp_iff_register(handle, "SLEN", get_slen);
+	ret |= libxmp_iff_register(handle, "PLEN", get_plen);
+	ret |= libxmp_iff_register(handle, "PATT", get_patt);
+	ret |= libxmp_iff_register(handle, "PBOD", get_pbod);
+	ret |= libxmp_iff_register(handle, "SBOD", get_sbod);
 
 	if (ret != 0)
 		return -1;
 
-	set_type(m, "Oktalyzer");
+	libxmp_set_type(m, "Oktalyzer");
 
 	MODULE_INFO();
 
 	/* Load IFF chunks */
-	if (iff_load(handle, m, f, &data) < 0) {
-		iff_release(handle);
+	if (libxmp_iff_load(handle, m, f, &data) < 0) {
+		libxmp_iff_release(handle);
 		return -1;
 	}
 
-	iff_release(handle);
+	libxmp_iff_release(handle);
+
+	m->period_type = PERIOD_MODRNG;
 
 	return 0;
 }

@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -133,7 +133,11 @@ void mmd_xlat_fx(struct xmp_event *event, int bpm_on, int bpmlen, int med_8ch,
 		 * This sets the secondary tempo (the number of timing
 		 * pulses per note). The argument must be from 01 to 20.
 		 */
-		event->fxt = FX_SPEED;
+		if (event->fxp >= 1 && event->fxp <= 20) {
+			event->fxt = FX_SPEED;
+		} else {
+			event->fxt = event->fxp = 0;
+		}
 		break;
 	case 0x0a:
 		/* 0A not mentioned but it's Protracker-compatible */
@@ -378,6 +382,11 @@ int mmd_load_hybrid_instrument(HIO_HANDLE *f, struct module_data *m, int i,
 	int length, type;
 	int pos = hio_tell(f);
 
+	/* Sanity check */
+	if (smp_idx >= mod->smp) {
+		return -1;
+	}
+
 	synth->defaultdecay = hio_read8(f);
 	hio_seek(f, 3, SEEK_CUR);
 	synth->rep = hio_read16b(f);
@@ -390,15 +399,20 @@ int mmd_load_hybrid_instrument(HIO_HANDLE *f, struct module_data *m, int i,
 	hio_read(synth->voltbl, 1, 128, f);;
 	hio_read(synth->wftbl, 1, 128, f);;
 
+	/* Sanity check */
+	if (synth->voltbllen > 128 || synth->wftbllen > 128) {
+		return -1;
+	}
+
 	hio_seek(f, pos - 6 + hio_read32b(f), SEEK_SET);
 	length = hio_read32b(f);
 	type = hio_read16b(f);
 
-	if (med_new_instrument_extras(xxi) != 0)
+	if (libxmp_med_new_instrument_extras(xxi) != 0)
 		return -1;
 
 	xxi->nsm = 1;
-	if (subinstrument_alloc(mod, i, 1) < 0)
+	if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 		return -1;
 
 	MED_INSTRUMENT_EXTRAS((*xxi))->vts = synth->volspeed;
@@ -419,7 +433,7 @@ int mmd_load_hybrid_instrument(HIO_HANDLE *f, struct module_data *m, int i,
 	xxs->lpe = xxs->lps + 2 * sample->replen;
 	xxs->flg = sample->replen > 1 ?  XMP_SAMPLE_LOOP : 0;
 
-	if (load_sample(m, f, 0, xxs, NULL) < 0)
+	if (libxmp_load_sample(m, f, 0, xxs, NULL) < 0)
 		return -1;
 
 	return 0;
@@ -448,6 +462,11 @@ int mmd_load_synth_instrument(HIO_HANDLE *f, struct module_data *m, int i,
 	for (j = 0; j < 64; j++)
 		synth->wf[j] = hio_read32b(f);
 
+	/* Sanity check */
+	if (synth->voltbllen > 128 || synth->wftbllen > 128 || synth->wforms > 256) {
+		return -1;
+	}
+
 	D_(D_INFO "  VS:%02x WS:%02x WF:%02x %02x %+3d %+1d",
 			synth->volspeed, synth->wfspeed,
 			synth->wforms & 0xff,
@@ -455,16 +474,19 @@ int mmd_load_synth_instrument(HIO_HANDLE *f, struct module_data *m, int i,
 			sample->strans,
 			exp_smp->finetune);
 
-	if (synth->wforms == 0xffff)	
+	if (synth->wforms == 0xffff) {
+		xxi->nsm = 0;
 		return 1;
+	}
+
 	if (synth->wforms > 64)
 		return -1;
 
-	if (med_new_instrument_extras(&mod->xxi[i]) != 0)
+	if (libxmp_med_new_instrument_extras(&mod->xxi[i]) != 0)
 		return -1;
 
 	mod->xxi[i].nsm = synth->wforms;
-	if (subinstrument_alloc(mod, i, synth->wforms) < 0)
+	if (libxmp_alloc_subinstrument(mod, i, synth->wforms) < 0)
 		return -1;
 
 	MED_INSTRUMENT_EXTRAS((*xxi))->vts = synth->volspeed;
@@ -473,6 +495,10 @@ int mmd_load_synth_instrument(HIO_HANDLE *f, struct module_data *m, int i,
 	for (j = 0; j < synth->wforms; j++) {
 		struct xmp_subinstrument *sub = &xxi->sub[j];
 		struct xmp_sample *xxs = &mod->xxs[smp_idx];
+
+		/* Sanity check */
+		if (j >= xxi->nsm || smp_idx >= mod->smp)
+			return -1;
 
 		sub->pan = 0x80;
 		sub->vol = 64;
@@ -487,7 +513,7 @@ int mmd_load_synth_instrument(HIO_HANDLE *f, struct module_data *m, int i,
 		xxs->lpe = mod->xxs[smp_idx].len;
 		xxs->flg = XMP_SAMPLE_LOOP;
 
-		if (load_sample(m, f, 0, xxs, NULL) < 0)
+		if (libxmp_load_sample(m, f, 0, xxs, NULL) < 0)
 			return -1;
 
 		smp_idx++;
@@ -507,14 +533,18 @@ int mmd_load_sampled_instrument(HIO_HANDLE *f, struct module_data *m, int i,
 	struct xmp_sample *xxs;
 	int j, k;
 
-	// hold & decay support
-        if (med_new_instrument_extras(xxi) != 0)
+	/* Sanity check */
+	if (smp_idx >= mod->smp)
+		return -1;
+
+	/* hold & decay support */
+        if (libxmp_med_new_instrument_extras(xxi) != 0)
                 return -1;
 	MED_INSTRUMENT_EXTRAS(*xxi)->hold = exp_smp->hold;
 	xxi->rls = 0xfff - (exp_smp->decay << 4);
 
 	xxi->nsm = 1;
-	if (subinstrument_alloc(mod, i, 1) < 0)
+	if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 		return -1;
 
 	sub = &xxi->sub[0];
@@ -576,7 +606,7 @@ int mmd_load_sampled_instrument(HIO_HANDLE *f, struct module_data *m, int i,
 	}
 
 
-	if (load_sample(m, f, SAMPLE_FLAG_BIGEND, xxs, NULL) < 0) {
+	if (libxmp_load_sample(m, f, SAMPLE_FLAG_BIGEND, xxs, NULL) < 0) {
 		return -1;
 	}
 
@@ -614,15 +644,19 @@ int mmd_load_iffoct_instrument(HIO_HANDLE *f, struct module_data *m, int i,
 	if (num_oct < 2 || num_oct > 7)
 		return -1;
 
-	// hold & decay support
-	if (med_new_instrument_extras(xxi) != 0)
+	/* Sanity check */
+	if (smp_idx + num_oct > mod->smp)
+		return -1;
+
+	/* hold & decay support */
+	if (libxmp_med_new_instrument_extras(xxi) != 0)
 		return -1;
 
 	MED_INSTRUMENT_EXTRAS(*xxi)->hold = exp_smp->hold;
 	xxi->rls = 0xfff - (exp_smp->decay << 4);
 
 	xxi->nsm = num_oct;
-	if (subinstrument_alloc(mod, i, num_oct) < 0)
+	if (libxmp_alloc_subinstrument(mod, i, num_oct) < 0)
 		return -1;
 
 	/* base octave size */
@@ -650,7 +684,7 @@ int mmd_load_iffoct_instrument(HIO_HANDLE *f, struct module_data *m, int i,
 			xxs->flg |= XMP_SAMPLE_LOOP;
 		}
 	
-		if (load_sample(m, f, SAMPLE_FLAG_BIGEND, xxs, NULL) < 0) {
+		if (libxmp_load_sample(m, f, SAMPLE_FLAG_BIGEND, xxs, NULL) < 0) {
 			return -1;
 		}
 
@@ -708,7 +742,7 @@ void mmd_info_text(HIO_HANDLE *f, struct module_data *m, int offset)
 	type = hio_read16b(f);
 	if (type == 1) {	/* 1 = ASCII */
 		len = hio_read32b(f);
-		if (len != 0) {
+		if (len != 0 && len < 0x7fffffff) {
 			m->comment = malloc(len + 1);
 			if (m->comment == NULL)
 				return;

@@ -1,9 +1,23 @@
 /* Extended Module Player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
- * This file is part of the Extended Module Player and is distributed
- * under the terms of the GNU Lesser General Public License. See COPYING.LIB
- * for more information.
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 
 #include "loader.h"
@@ -15,7 +29,7 @@
 static int psm_test (HIO_HANDLE *, char *, const int);
 static int psm_load (struct module_data *, HIO_HANDLE *, const int);
 
-const struct format_loader psm_loader = {
+const struct format_loader libxmp_loader_psm = {
 	"Protracker Studio",
 	psm_test,
 	psm_load
@@ -26,7 +40,7 @@ static int psm_test(HIO_HANDLE *f, char *t, const int start)
 	if (hio_read32b(f) != MAGIC_PSM_)
 		return -1;
 
-	read_title(f, t, 60);
+	libxmp_read_title(f, t, 60);
 
 	return 0;
 }
@@ -42,35 +56,41 @@ static int psm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	uint8 buf[1024];
 	uint32 p_ord, p_chn, p_pat, p_ins;
 	uint32 p_smp[64];
-	int type, ver, mode;
+	int type, ver /*, mode*/;
  
 	LOAD_INIT();
 
 	hio_read32b(f);
 
 	hio_read(buf, 1, 60, f);
-	strncpy(mod->name, (char *)buf, XMP_NAME_SIZE);
+	strncpy(mod->name, (char *)buf, 60);
 
-	type = hio_read8(f);	/* song type */
+	type = hio_read8(f);		/* song type */
 	ver = hio_read8(f);		/* song version */
-	mode = hio_read8(f);	/* pattern version */
+	/*mode =*/ hio_read8(f);	/* pattern version */
 
-	if (type & 0x01)	/* song mode not supported */
+	if (type & 0x01)		/* song mode not supported */
 		return -1;
 
-	set_type(m, "Protracker Studio PSM %d.%02d", MSN(ver), LSN(ver));
+	libxmp_set_type(m, "Protracker Studio PSM %d.%02d", MSN(ver), LSN(ver));
 
 	mod->spd = hio_read8(f);
 	mod->bpm = hio_read8(f);
-	hio_read8(f);		/* master volume */
-	hio_read16l(f);		/* song length */
+	hio_read8(f);			/* master volume */
+	hio_read16l(f);			/* song length */
 	mod->len = hio_read16l(f);
 	mod->pat = hio_read16l(f);
 	mod->ins = hio_read16l(f);
-	hio_read16l(f);               /* ignore channels to play */
-	mod->chn = hio_read16l(f);    /* use channels to proceed */
+	hio_read16l(f);			/* ignore channels to play */
+	mod->chn = hio_read16l(f);	/* use channels to proceed */
 	mod->smp = mod->ins;
 	mod->trk = mod->pat * mod->chn;
+
+	/* Sanity check */
+	if (mod->len > 256 || mod->pat > 256 || mod->ins > 255 ||
+	    mod->chn > XMP_MAX_CHANNELS) {
+		return -1;
+        }
 
 	p_ord = hio_read32l(f);
 	p_chn = hio_read32l(f);
@@ -80,6 +100,8 @@ static int psm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	/* should be this way but fails with Silverball song 6 */
 	//mod->flg |= ~type & 0x02 ? XXM_FLG_MODRNG : 0;
 
+	m->c4rate = C4_NTSC_RATE;
+
 	MODULE_INFO();
 
 	hio_seek(f, start + p_ord, SEEK_SET);
@@ -88,7 +110,7 @@ static int psm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 	hio_seek(f, start + p_chn, SEEK_SET);
 	hio_read(buf, 1, 16, f);
 
-	if (instrument_init(mod) < 0)
+	if (libxmp_init_instrument(m) < 0)
 		return -1;
 
 	hio_seek(f, start + p_ins, SEEK_SET);
@@ -96,13 +118,13 @@ static int psm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		uint16 flags, c2spd;
 		int finetune;
 
-		if (subinstrument_alloc(mod, i, 1) < 0)
+		if (libxmp_alloc_subinstrument(mod, i, 1) < 0)
 			return -1;
 
 		hio_read(buf, 1, 13, f);	/* sample filename */
 		hio_read(buf, 1, 24, f);	/* sample description */
+		buf[24] = 0;			/* add string termination */
 		strncpy((char *)mod->xxi[i].name, (char *)buf, 24);
-		adjust_string((char *)mod->xxi[i].name);
 		p_smp[i] = hio_read32l(f);
 		hio_read32l(f);			/* memory location */
 		hio_read16l(f);			/* sample number */
@@ -112,12 +134,13 @@ static int psm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 		mod->xxs[i].lpe = hio_read32l(f);
 		finetune = (int8)(hio_read8(f) << 4);
 		mod->xxi[i].sub[0].vol = hio_read8(f);
-		c2spd = 8363 * hio_read16l(f) / 8448;
+		c2spd = hio_read16l(f);
 		mod->xxi[i].sub[0].pan = 0x80;
 		mod->xxi[i].sub[0].sid = i;
 		mod->xxs[i].flg = flags & 0x80 ? XMP_SAMPLE_LOOP : 0;
 		mod->xxs[i].flg |= flags & 0x20 ? XMP_SAMPLE_LOOP_BIDIR : 0;
-		c2spd_to_note(c2spd, &mod->xxi[i].sub[0].xpo,
+
+		libxmp_c2spd_to_note(c2spd, &mod->xxi[i].sub[0].xpo,
 						&mod->xxi[i].sub[0].fin);
 		mod->xxi[i].sub[0].fin += finetune;
 
@@ -130,7 +153,7 @@ static int psm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 			'L' : ' ', mod->xxi[i].sub[0].vol, c2spd);
 	}
 	
-	if (pattern_init(mod) < 0)
+	if (libxmp_init_pattern(mod) < 0)
 		return -1;
 
 	D_(D_INFO "Stored patterns: %d", mod->pat);
@@ -142,9 +165,15 @@ static int psm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 		len = hio_read16l(f) - 4;
 		rows = hio_read8(f);
+		if (rows > 64) {
+			return -1;
+		}
 		chan = hio_read8(f);
+		if (chan > 32) {
+			return -1;
+		}
 
-		if (pattern_tracks_alloc(mod, i, rows) < 0)
+		if (libxmp_alloc_pattern_tracks(mod, i, rows) < 0)
 			return -1;
 
 		for (r = 0; r < rows; r++) {
@@ -189,7 +218,7 @@ static int psm_load(struct module_data *m, HIO_HANDLE *f, const int start)
 
 	for (i = 0; i < mod->ins; i++) {
 		hio_seek(f, start + p_smp[i], SEEK_SET);
-		if (load_sample(m, f, SAMPLE_FLAG_DIFF,
+		if (libxmp_load_sample(m, f, SAMPLE_FLAG_DIFF,
 				&mod->xxs[mod->xxi[i].sub[0].sid], NULL) < 0)
 			return -1;
 	}

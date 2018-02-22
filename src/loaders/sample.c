@@ -1,5 +1,5 @@
-/* Extended Module Player format loaders
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -24,7 +24,6 @@
 #include "loader.h"
 
 #ifndef LIBXMP_CORE_PLAYER
-#include "synth.h"
 
 /*
  * From the Audio File Formats (version 2.5)
@@ -78,26 +77,6 @@ static void convert_vidc_to_linear(uint8 *p, int l)
 			p[i] *= -1;
 	}
 }
-
-/* Convert HSC OPL2 instrument data to SBI instrument data */
-static void convert_hsc_to_sbi(uint8 *a)
-{
-	uint8 b[11];
-	int i;
-
-	for (i = 0; i < 10; i += 2) {
-		uint8 x;
-		x = a[i];
-		a[i] = a[i + 1];
-		a[i + 1] = x;
-	}
-
-	memcpy(b, a, 11);
-	a[8] = b[10];
-	a[10] = b[9];
-	a[9] = b[8];
-}
-
 
 static void adpcm4_decoder(uint8 *inp, uint8 *outp, char *tab, int len)
 {
@@ -216,52 +195,41 @@ static void unroll_loop(struct xmp_sample *xxs)
 }
 
 
-int load_sample(struct module_data *m, HIO_HANDLE *f, int flags, struct xmp_sample *xxs, void *buffer)
+int libxmp_load_sample(struct module_data *m, HIO_HANDLE *f, int flags, struct xmp_sample *xxs, void *buffer)
 {
 	int bytelen, extralen, unroll_extralen, i;
 
 #ifndef LIBXMP_CORE_PLAYER
 	/* Adlib FM patches */
 	if (flags & SAMPLE_FLAG_ADLIB) {
-		const int size = 11;
-
-		if (flags & SAMPLE_FLAG_HSC) {
-			convert_hsc_to_sbi(buffer);
-		}
-
-		xxs->data = malloc(size + 4);
-		if (xxs->data == NULL)
-			return -1;
-
-		*(uint32 *)xxs->data = 0;
-		xxs->data += 4;
-
-		memcpy(xxs->data, buffer, size);
-
-		xxs->flg |= XMP_SAMPLE_SYNTH;
-		xxs->len = size;
-
 		return 0;
 	}
 #endif
 
-	/* Empty samples
+	/* Empty or invalid samples
 	 */
-	if (xxs->len == 0) {
+	if (xxs->len <= 0) {
 		return 0;
 	}
 
 	/* Skip sample loading
 	 * FIXME: fails for ADPCM samples
+	 *
+	 * + Sanity check: skip huge samples (likely corrupt module)
 	 */
-	if (m && m->smpctl & XMP_SMPCTL_SKIP) {
-		if (~flags & SAMPLE_FLAG_NOLOAD)
+	if (xxs->len > MAX_SAMPLE_SIZE || (m && m->smpctl & XMP_SMPCTL_SKIP)) {
+		if (~flags & SAMPLE_FLAG_NOLOAD) {
+			/* coverity[check_return] */
 			hio_seek(f, xxs->len, SEEK_CUR);
+		}
 		return 0;
 	}
 
 	/* Loop parameters sanity check
 	 */
+	if (xxs->lps < 0) {
+		xxs->lps = 0;
+	}
 	if (xxs->lpe > xxs->len) {
 		xxs->lpe = xxs->len;
 	}
@@ -302,8 +270,9 @@ int load_sample(struct module_data *m, HIO_HANDLE *f, int flags, struct xmp_samp
 
 	/* add guard bytes before the buffer for higher order interpolation */
 	xxs->data = malloc(bytelen + extralen + unroll_extralen + 4);
-	if (xxs->data == NULL)
-		return -1;
+	if (xxs->data == NULL) {
+		goto err;
+	}
 
 	*(uint32 *)xxs->data = 0;
 	xxs->data += 4;
@@ -316,8 +285,12 @@ int load_sample(struct module_data *m, HIO_HANDLE *f, int flags, struct xmp_samp
 		int x2 = (bytelen + 1) >> 1;
 		char table[16];
 
-		hio_read(table, 1, 16, f);
-		hio_read(xxs->data + x2, 1, x2, f);
+		if (hio_read(table, 1, 16, f) != 16) {
+			goto err2;
+		}
+		if (hio_read(xxs->data + x2, 1, x2, f) != x2) {
+			goto err2;
+		}
 		adpcm4_decoder((uint8 *)xxs->data + x2,
 			       (uint8 *)xxs->data, table, bytelen);
 	} else
@@ -325,7 +298,7 @@ int load_sample(struct module_data *m, HIO_HANDLE *f, int flags, struct xmp_samp
 	{
 		int x = hio_read(xxs->data, 1, bytelen, f);
 		if (x != bytelen) {
-			D_(D_WARN, "short read (%d) in sample load", x - bytelen);
+			D_(D_WARN "short read (%d) in sample load", x - bytelen);
 			memset(xxs->data + x, 0, bytelen - x);
 		}
 	}
@@ -412,27 +385,32 @@ int load_sample(struct module_data *m, HIO_HANDLE *f, int flags, struct xmp_samp
 
 	/* Fix sample at loop */
 	if (xxs->flg & XMP_SAMPLE_LOOP) {
-		if (xxs->flg & XMP_SAMPLE_16BIT) {
-			int lpe = xxs->lpe * 2;
-			int lps = xxs->lps * 2;
+		int lpe = xxs->lpe;
+		int lps = xxs->lps;
 
-			if (xxs->flg & XMP_SAMPLE_LOOP_BIDIR) {
-				lpe += (xxs->lpe - xxs->lps) * 2;
-			}
-			xxs->data[lpe] = xxs->data[lpe - 2];
-			xxs->data[lpe + 1] = xxs->data[lpe - 1];
-			for (i = 0; i < 6; i++) {
-				xxs->data[lpe + 2 + i] = xxs->data[lps + i];
+		if (xxs->flg & XMP_SAMPLE_LOOP_BIDIR) {
+			lpe += lpe - lps;
+		}
+
+		if (xxs->flg & XMP_SAMPLE_16BIT) {
+			lpe <<= 1;
+			lps <<= 1;
+			for (i = 0; i < 8; i++) {
+				xxs->data[lpe + i] = xxs->data[lps + i];
 			}
 		} else {
-			int lpe = xxs->lpe + unroll_extralen;
-			int lps = xxs->lps;
-			xxs->data[lpe] = xxs->data[lpe - 1];
-			for (i = 0; i < 3; i++) {
-				xxs->data[lpe + 1 + i] = xxs->data[lps + i];
+			for (i = 0; i < 4; i++) {
+				xxs->data[lpe + i] = xxs->data[lps + i];
 			}
 		}
 	}
 
 	return 0;
+
+#ifndef LIBXMP_CORE_PLAYER
+    err2:
+	free(xxs->data - 4);
+#endif
+    err:
+	return -1;
 }

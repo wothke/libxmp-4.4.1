@@ -1,8 +1,9 @@
 /*
  * Module_Protector.c   Copyright (C) 1997 Asle / ReDoX
- *                      Copyright (C) 2006-2007 Claudio Matsuoka
  *
  * Converts MP packed MODs back to PTK MODs
+ *
+ * Modified in 2006,2007,2014 by Claudio Matsuoka
  */
 
 #include <stdlib.h>
@@ -12,7 +13,7 @@
 #define MAGIC_TRK1	MAGIC4('T','R','K','1')
 
 
-static int depack_mp(FILE *in, FILE *out)
+static int depack_mp(HIO_HANDLE *in, FILE *out)
 {
 	uint8 c1;
 	uint8 ptable[128];
@@ -24,24 +25,24 @@ static int depack_mp(FILE *in, FILE *out)
 
 	pw_write_zero(out, 20);				/* title */
 
-	if (read32b(in) != MAGIC_TRK1)			/* TRK1 */
-		fseek(in, -4, SEEK_CUR);
+	if (hio_read32b(in) != MAGIC_TRK1)			/* TRK1 */
+		hio_seek(in, -4, SEEK_CUR);
 
 	for (i = 0; i < 31; i++) {
 		pw_write_zero(out, 22);			/* sample name */
-		write16b(out, size = read16b(in));	/* size */
+		write16b(out, size = hio_read16b(in));	/* size */
 		ssize += size * 2;
-		write8(out, read8(in));			/* finetune */
-		write8(out, read8(in));			/* volume */
-		write16b(out, read16b(in));		/* loop start */
-		write16b(out, read16b(in));		/* loop size */
+		write8(out, hio_read8(in));			/* finetune */
+		write8(out, hio_read8(in));			/* volume */
+		write16b(out, hio_read16b(in));		/* loop start */
+		write16b(out, hio_read16b(in));		/* loop size */
 	}
 
-	write8(out, read8(in));		/* pattern table length */
-	write8(out, read8(in));		/* NoiseTracker restart byte */
+	write8(out, hio_read8(in));		/* pattern table length */
+	write8(out, hio_read8(in));		/* NoiseTracker restart byte */
 
 	for (max = i = 0; i < 128; i++) {
-		write8(out, c1 = read8(in));
+		write8(out, c1 = hio_read8(in));
 		if (c1 > max)
 			max = c1;
 	}
@@ -49,8 +50,8 @@ static int depack_mp(FILE *in, FILE *out)
 
 	write32b(out, PW_MOD_MAGIC);		/* M.K. */
 
-	if (read32b(in) != 0)			/* bypass unknown empty bytes */
-		fseek (in, -4, SEEK_CUR);
+	if (hio_read32b(in) != 0)			/* bypass unknown empty bytes */
+		hio_seek(in, -4, SEEK_CUR);
 
 	pw_move_data(out, in, 1024 * max);	/* pattern data */
 	pw_move_data(out, in, ssize);		/* sample data */
@@ -60,97 +61,95 @@ static int depack_mp(FILE *in, FILE *out)
 
 static int test_mp_noid(uint8 *data, char *t, int s)
 {
-	int start, ssize;
-	int j, k, l, m, n;
-
-	start = 0;
+	int i;
+	int len, psize, hdr_ssize;
 
 #if 0
-	if (i < 3) {
-		Test = BAD;
-		return;
+	if (s < 378) {
+		return - 1;
 	}
 #endif
 
 	/* test #2 */
-	l = 0;
-	for (j = 0; j < 31; j++) {
-		int x = start + 8 * j;
+	hdr_ssize = 0;
+	for (i = 0; i < 31; i++) {
+		uint8 *d = data + i * 8;
+		int size = readmem16b(d) << 1;		/* size */
+		int start = readmem16b(d + 4) << 1;	/* loop start */
+		int lsize = readmem16b(d + 6) << 1;	/* loop size */
 
-		k = readmem16b(data + x) * 2;		/* size */
-		m = readmem16b(data + x + 4) * 2;	/* loop start */
-		n = readmem16b(data + x + 6) * 2;	/* loop size */
-		l += k;
+		hdr_ssize += size;
 
 		/* finetune > 0x0f ? */
-		if (data[x + 2] > 0x0f)
+		if (d[2] > 0x0f)
 			return -1;
 
-		/* loop start+replen > size ? */
-		if (n != 2 && (m + n) > k)
+		/* loop start+repsize > size ? */
+		if (lsize != 2 && (start + lsize) > size)
 			return -1;
 
 		/* loop size > size ? */
-		if (n > (k + 2))
+		if (lsize > (size + 2))
 			return -1;
 
 		/* loop start != 0 and loop size = 0 */
-		if (m != 0 && n <= 2)
+		if (start != 0 && lsize <= 2)
 			return -1;
 
 		/* when size!=0  loopsize==0 ? */
-		if (k != 0 && n == 0)
+		if (size != 0 && lsize == 0)
 			return -1;
 	}
 
-	if (l <= 2)
+	if (hdr_ssize <= 2)
 		return -1;
 
 	/* test #3 */
-	l = data[start + 248];
-	if (l > 0x7f || l == 0x00)
+	len = data[248];
+	if (len == 0 || len > 0x7f)
 		return -1;
 
 	/* test #4 */
-	/* l contains the size of the pattern list */
-	k = 0;
-	for (j = 0; j < 128; j++) {
-		if (data[start + 250 + j] > k)
-			k = data[start + 250 + j];
-		if (data[start + 250 + j] > 0x7f)
+	psize = 0;
+	for (i = 0; i < 128; i++) {
+		int pat = data[250 + i];
+		if (pat > 0x7f)
 			return -1;
-		if (j > l + 3) {
-			if (data[start + 250 + j] != 0x00)
+		if (pat > psize)
+			psize = pat;
+		if (i > len + 3) {
+			if (pat != 0)
 				return -1;
 		}
 	}
-	k++;
+	psize++;
+	psize <<= 8;
+
+	PW_REQUEST_DATA(s, 378 + psize * 4);
 
 	/* test #5  ptk notes .. gosh ! (testing all patterns !) */
-	/* k contains the number of pattern saved */
-	for (j = 0; j < (256 * k); j++) {
-		int x = start + j * 4;
+	for (i = 0; i < psize; i++) {
+		uint8 *d = data + 378 + i * 4;
+		uint16 data;
 
-		l = data[x + 378];
-		if (l > 19 && l != 74)		/* MadeInCroatia has l == 74 */
+		/* MadeInCroatia has l == 74 */
+		if (*d > 19 && *d != 74)
 			return -1;
 
-		ssize = data[x + 378] & 0x0f;
-		ssize *= 256;
-		ssize += data[x + 379];
+		data = readmem16b(d) & 0x0fff;
 
-		if (ssize > 0 && ssize < 0x71)
+		if (data > 0 && data < 0x71)
 			return -1;
 	}
 
 	/* test #6  (loopStart+LoopSize > Sample ? ) */
-	for (j = 0; j < 31; j++) {
-		int x = start + j * 8;
+	for (i = 0; i < 31; i++) {
+		uint8 *d = data + i * 8;
 
-		k = readmem16b(data + x) * 2;
-		l = (readmem16b(data + x + 4) + readmem16b(data + x + 6)) * 2;
+		int size = readmem16b(d) << 1;
+		int lend = (readmem16b(d + 4) + readmem16b(d + 6)) << 1;
 
-		if (l > (k + 2))
+		if (lend > size + 2)
 			return -1;
 	}
 
@@ -161,39 +160,41 @@ static int test_mp_noid(uint8 *data, char *t, int s)
 
 static int test_mp_id(uint8 *data, char *t, int s)
 {
-	int j, l, k;
-	int start = 0;
+	int i;
+	int len, psize;
 
 	/* "TRK1" Module Protector */
 	if (readmem32b(data) != MAGIC_TRK1)
 		return -1;
 
 	/* test #1 */
-	for (j = 0; j < 31; j++) {
-		if (data[start + 6 + 8 * j] > 0x0f)
+	for (i = 0; i < 31; i++) {
+		if (data[6 + 8 * i] > 0x0f)
 			return -1;
 	}
 
 	/* test #2 */
-	l = data[start + 252];
-	if (l > 0x7f || l == 0x00)
+	len = data[252];
+	if (len == 0 || len > 0x7f)
 		return -1;
 
 	/* test #4 */
-	k = 0;
-	for (j = 0; j < 128; j++) {
-		if (data[start + 254 + j] > k)
-			k = data[start + 254 + j];
-		if (data[start + 254 + j] > 0x7f)
+	psize = 0;
+	for (i = 0; i < 128; i++) {
+		int pat = data[254 + i];
+		if (pat > 0x7f)
 			return -1;
+		if (pat > psize)
+			psize = pat;
 	}
-	k++;
+	psize++;
+	psize <<= 8;
 
 	/* test #5  ptk notes .. gosh ! (testing all patterns !) */
 	/* k contains the number of pattern saved */
-	for (j = 0; j < (256 * k); j++) {
-		l = data[start + 382 + j * 4];
-		if (l > 19)
+	for (i = 0; i < psize; i++) {
+		int x = data[382 + i * 4];
+		if (x > 19)
 			return -1;
 	}
 

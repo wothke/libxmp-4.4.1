@@ -40,6 +40,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include "common.h"
+#include "depacker.h"
 #include "crc32.h"
 
 /* Constants for huffman coding */
@@ -348,7 +349,8 @@ got_huff_bits:
 		   literal used is the one at the head of the mtfSymbol array.) */
 		if(runPos) {
 			runPos=0;
-			if(dbufCount+t>=dbufSize) return RETVAL_DATA_ERROR;
+			if(t < 0 || t > dbufSize || dbufCount+t>=dbufSize)
+				return RETVAL_DATA_ERROR;
 
 			uc = symToByte[mtfSymbol[0]];
 			byteCount[uc] += t;
@@ -452,7 +454,7 @@ static int read_bunzip(bunzip_data *bd, char *outbuf, int len)
 			/* Write next byte into output buffer, updating CRC */
 			outbuf[gotcount++] = current;
 			bd->writeCRC=(((bd->writeCRC)<<8)
-						  ^crc32_table_B[((bd->writeCRC)>>24)^current]);
+						  ^libxmp_crc32_table_B[((bd->writeCRC)>>24)^current]);
 			/* Loop now if we're outputting multiple copies of this byte */
 			if (bd->writeCopies) {
 				--bd->writeCopies;
@@ -553,15 +555,20 @@ static int start_bunzip(bunzip_data **bdp, FILE *in, char *inbuf, int len)
 	return RETVAL_OK;
 }
 
+static int test_bzip2(unsigned char *b)
+{
+	return b[0] == 'B' && b[1] == 'Z' && b[2] == 'h';
+}
+
 /* Example usage: decompress src_fd to dst_fd.  (Stops at end of bzip data,
    not end of file.) */
-int decrunch_bzip2(FILE *src, FILE *dst)
+static int decrunch_bzip2(FILE *src, FILE *dst)
 {
 	char *outbuf;
 	bunzip_data *bd;
 	int i;
 
-	crc32_init_B();
+	libxmp_crc32_init_B();
 
 	if(!(outbuf=malloc(IOBUF_SIZE))) return RETVAL_OUT_OF_MEMORY;
 	if(!(i=start_bunzip(&bd,src,0,0))) {
@@ -581,20 +588,7 @@ int decrunch_bzip2(FILE *src, FILE *dst)
 	return i == 0 ? 0 : -1;
 }
 
-#ifdef TESTING
-
-static char * const bunzip_errors[]={NULL,"Bad file checksum","Not bzip data",
-		"Unexpected input EOF","Unexpected output EOF","Data error",
-		 "Out of memory","Obsolete (pre 0.9.5) bzip format not supported."};
-
-/* Dumb little test thing, decompress stdin to stdout */
-int main(int argc, char *argv[])
-{
-	int i=uncompressStream(0,1);
-	char c;
-
-	if(i) fprintf(stderr,"%s\n", bunzip_errors[-i]);
-    else if(read(0,&c,1)) fprintf(stderr,"Trailing garbage ignored\n");
-	return -i;
-}
-#endif
+struct depacker libxmp_depacker_bzip2 = {
+	test_bzip2,
+	decrunch_bzip2
+};

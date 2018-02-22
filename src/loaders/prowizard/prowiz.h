@@ -5,6 +5,7 @@
 #include "list.h"
 #include "common.h"
 #include "format.h"
+#include "hio.h"
 
 #define MIN_FILE_LENGHT 2048
 
@@ -27,12 +28,12 @@
 struct pw_format {
 	char *name;
 	int (*test)(uint8 *, char *, int);
-	int (*depack)(FILE *, FILE *);
+	int (*depack)(HIO_HANDLE *, FILE *);
 	struct list_head list;
 };
 
-int pw_wizardry(int, int, char **);
-int pw_move_data(FILE *, FILE *, int);
+int pw_wizardry(HIO_HANDLE *, FILE *, char **);
+int pw_move_data(FILE *, HIO_HANDLE *, int);
 int pw_write_zero(FILE *, int);
 /* int pw_enable(char *, int); */
 int pw_check(unsigned char *, int, struct xmp_test_info *);
@@ -60,7 +61,7 @@ extern const struct pw_format pw_np2;
 extern const struct pw_format pw_np3;
 extern const struct pw_format pw_nru;
 extern const struct pw_format pw_ntp;
-extern const struct pw_format pw_p01;
+extern const struct pw_format pw_pm01;
 extern const struct pw_format pw_p10c;
 extern const struct pw_format pw_p18a;
 extern const struct pw_format pw_p20;
@@ -69,7 +70,9 @@ extern const struct pw_format pw_p50a;
 extern const struct pw_format pw_p60a;
 extern const struct pw_format pw_p61a;
 extern const struct pw_format pw_pha;
+extern const struct pw_format pw_pp10;
 extern const struct pw_format pw_pp21;
+extern const struct pw_format pw_pp30;
 extern const struct pw_format pw_pru1;
 extern const struct pw_format pw_pru2;
 extern const struct pw_format pw_skyt;
@@ -77,6 +80,8 @@ extern const struct pw_format pw_starpack;
 extern const struct pw_format pw_stim;
 extern const struct pw_format pw_tdd;
 extern const struct pw_format pw_titanics;
+extern const struct pw_format pw_tp1;
+extern const struct pw_format pw_tp2;
 extern const struct pw_format pw_tp3;
 extern const struct pw_format pw_unic_emptyid;
 extern const struct pw_format pw_unic_id;

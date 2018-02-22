@@ -1,5 +1,5 @@
-/* Extended Module Player core player
- * Copyright (C) 1996-2014 Claudio Matsuoka and Hipolito Carraro Jr
+/* Extended Module Player
+ * Copyright (C) 1996-2016 Claudio Matsuoka and Hipolito Carraro Jr
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -27,36 +27,38 @@
 #include "hio.h"
 
 
-struct xmp_instrument *get_instrument(struct context_data *ctx, int ins)
+struct xmp_instrument *libxmp_get_instrument(struct context_data *ctx, int ins)
 {
 	struct smix_data *smix = &ctx->smix;
 	struct module_data *m = &ctx->m;
 	struct xmp_module *mod = &m->mod;
 	struct xmp_instrument *xxi;
 
-	if (ins < mod->ins)
+	if (ins < mod->ins) {
 		xxi = &mod->xxi[ins];
-	else if (ins < mod->ins + smix->ins)
+	} else if (ins < mod->ins + smix->ins) {
 		xxi = &smix->xxi[ins - mod->ins];
-	else
+	} else {
 		xxi = NULL;
+	}
 
 	return xxi;
 }
 
-struct xmp_sample *get_sample(struct context_data *ctx, int smp)
+struct xmp_sample *libxmp_get_sample(struct context_data *ctx, int smp)
 {
 	struct smix_data *smix = &ctx->smix;
 	struct module_data *m = &ctx->m;
 	struct xmp_module *mod = &m->mod;
 	struct xmp_sample *xxs;
 
-	if (smp < mod->smp)
+	if (smp < mod->smp) {
 		xxs = &mod->xxs[smp];
-	else if (smp < mod->smp + smix->smp)
+	} else if (smp < mod->smp + smix->smp) {
 		xxs = &smix->xxs[smp - mod->smp];
-	else
+	} else {
 		xxs = NULL;
+	}
 
 	return xxs;
 }
@@ -66,15 +68,18 @@ int xmp_start_smix(xmp_context opaque, int chn, int smp)
 	struct context_data *ctx = (struct context_data *)opaque;
 	struct smix_data *smix = &ctx->smix;
 
-	if (ctx->state > XMP_STATE_LOADED)
+	if (ctx->state > XMP_STATE_LOADED) {
 		return -XMP_ERROR_STATE;
+	}
 
 	smix->xxi = calloc(sizeof (struct xmp_instrument), smp);
-	if (smix->xxi == NULL)
+	if (smix->xxi == NULL) {
 		goto err;
+	}
 	smix->xxs = calloc(sizeof (struct xmp_sample), smp);
-	if (smix->xxs == NULL)
+	if (smix->xxs == NULL) {
 		goto err1;
+	}
 
 	smix->chn = chn;
 	smix->ins = smix->smp = smp;
@@ -96,14 +101,17 @@ int xmp_smix_play_instrument(xmp_context opaque, int ins, int note, int vol, int
 	struct xmp_module *mod = &m->mod;
 	struct xmp_event *event;
 
-	if (ctx->state < XMP_STATE_PLAYING)
+	if (ctx->state < XMP_STATE_PLAYING) {
 		return -XMP_ERROR_STATE;
+	}
 
-	if (chn >= smix->chn || ins >= mod->ins)
+	if (chn >= smix->chn || ins >= mod->ins) {
 		return -XMP_ERROR_INVALID;
+	}
 
-	if (note == 0)
+	if (note == 0) {
 		note = 60;		/* middle C note number */
+	}
 
 	event = &p->inject_event[mod->chn + chn];
 	memset(event, 0, sizeof (struct xmp_event));
@@ -124,14 +132,17 @@ int xmp_smix_play_sample(xmp_context opaque, int ins, int note, int vol, int chn
 	struct xmp_module *mod = &m->mod;
 	struct xmp_event *event;
 
-	if (ctx->state < XMP_STATE_PLAYING)
+	if (ctx->state < XMP_STATE_PLAYING) {
 		return -XMP_ERROR_STATE;
+	}
 
-	if (chn >= smix->chn || ins >= smix->ins)
+	if (chn >= smix->chn || ins >= smix->ins) {
 		return -XMP_ERROR_INVALID;
+	}
 
-	if (note == 0)
+	if (note == 0) {
 		note = 60;		/* middle C note number */
+	}
 
 	event = &p->inject_event[mod->chn + chn];
 	memset(event, 0, sizeof (struct xmp_event));
@@ -151,8 +162,9 @@ int xmp_smix_channel_pan(xmp_context opaque, int chn, int pan)
 	struct module_data *m = &ctx->m;
 	struct channel_data *xc;
 
-	if (chn >= smix->chn || pan < 0 || pan > 255)
+	if (chn >= smix->chn || pan < 0 || pan > 255) {
 		return -XMP_ERROR_INVALID;
+	}
 
 	xc = &p->xc_data[m->mod.chn + chn];
 	xc->pan.val = pan;
@@ -208,7 +220,10 @@ int xmp_smix_load_sample(xmp_context opaque, int num, char *path)
 		goto err2;
 	}
 
-	hio_seek(h, 22, SEEK_SET);
+	if (hio_seek(h, 22, SEEK_SET) < 0) {
+		retval = -XMP_ERROR_SYSTEM;
+		goto err2;
+	}
 	chn = hio_read16l(h);
 	if (chn != 1) {
 		retval = -XMP_ERROR_FORMAT;
@@ -216,14 +231,32 @@ int xmp_smix_load_sample(xmp_context opaque, int num, char *path)
 	}
 
 	rate = hio_read32l(h);
+	if (rate == 0) {
+		retval = -XMP_ERROR_FORMAT;
+		goto err2;
+	}
 
-	hio_seek(h, 34, SEEK_SET);
+	if (hio_seek(h, 34, SEEK_SET) < 0) {
+		retval = -XMP_ERROR_SYSTEM;
+		goto err2;
+	}
 	bits = hio_read16l(h);
+	if (bits == 0) {
+		retval = -XMP_ERROR_FORMAT;
+		goto err2;
+	}
 
-	hio_seek(h, 40, SEEK_SET);
+	if (hio_seek(h, 40, SEEK_SET) < 0) {
+		retval = -XMP_ERROR_SYSTEM;
+		goto err2;
+	}
 	size = hio_read32l(h) / (bits / 8);
+	if (size == 0) {
+		retval = -XMP_ERROR_FORMAT;
+		goto err2;
+	}
 
-	c2spd_to_note(rate, &xxi->sub[0].xpo, &xxi->sub[0].fin);
+	libxmp_c2spd_to_note(rate, &xxi->sub[0].xpo, &xxi->sub[0].fin);
 
 	xxs->len = 8 * size / bits;
 	xxs->lps = 0;
@@ -235,9 +268,14 @@ int xmp_smix_load_sample(xmp_context opaque, int num, char *path)
 		retval = -XMP_ERROR_SYSTEM;
 		goto err2;
 	}
-
-	hio_seek(h, 44, SEEK_SET);
-	hio_read(xxs->data, 1, size, h);
+	if (hio_seek(h, 44, SEEK_SET) < 0) {
+		retval = -XMP_ERROR_SYSTEM;
+		goto err2;
+	}
+	if (hio_read(xxs->data, 1, size, h) != size) {
+		retval = -XMP_ERROR_SYSTEM;
+		goto err2;
+	}
 	hio_close(h);
 
 	return 0;
@@ -256,8 +294,9 @@ int xmp_smix_release_sample(xmp_context opaque, int num)
 	struct context_data *ctx = (struct context_data *)opaque;
 	struct smix_data *smix = &ctx->smix;
 
-	if (num >= smix->ins)
+	if (num >= smix->ins) {
 		return -XMP_ERROR_INVALID;
+	}
 
 	free(smix->xxs[num].data);
 	free(smix->xxi[num].sub);
@@ -274,8 +313,9 @@ void xmp_end_smix(xmp_context opaque)
 	struct smix_data *smix = &ctx->smix;
 	int i;
 
-	for (i = 0; i < smix->smp; i++)
+	for (i = 0; i < smix->smp; i++) {
 		xmp_smix_release_sample(opaque, i);
+	}
 
 	free(smix->xxs);
 	free(smix->xxi);

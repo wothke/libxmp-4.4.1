@@ -18,8 +18,8 @@
 #include <assert.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-
 #include "common.h"
+#include "depacker.h"
 
 /* #include "compat.h" 
 
@@ -65,7 +65,7 @@ static int initGetb(struct bitstream *bs, uint8 *src, uint32 src_length)
 
 
 /* get nbits from the compressed stream */
-static uint16 getb(struct bitstream *bs, int nbits)
+static int getb(struct bitstream *bs, int nbits)
 {
   bs->word &= 0x0000ffff;
 
@@ -75,7 +75,10 @@ static uint16 getb(struct bitstream *bs, int nbits)
     /* assert((bs->word & 0x0000ffffU) == 0); */
 
     /* Check that we don't go out of bounds */
-    assert((uint8 *)bs->src >= bs->orgsrc);
+    /*assert((uint8 *)bs->src >= bs->orgsrc);*/
+    if (bs->orgsrc > (uint8 *)bs->src) {
+       return -1;
+    }
 
     bs->word |= readmem16b((uint8 *)bs->src);
     bs->src--;
@@ -115,7 +118,7 @@ static int checkS404File(uint32 *buf, /*size_t len,*/
 }
 
 
-static void decompressS404(uint8 *src, uint8 *orgdst,
+static int decompressS404(uint8 *src, uint8 *orgdst,
 			   int32 dst_length, int32 src_length)
 {
   uint16 w;
@@ -124,6 +127,7 @@ static void decompressS404(uint8 *src, uint8 *orgdst,
   uint8 *dst;
   int32 oLen = dst_length;
   struct bitstream bs;
+  int x;
 
   dst = orgdst + oLen;
 
@@ -132,26 +136,50 @@ static void decompressS404(uint8 *src, uint8 *orgdst,
   /*printf("_bl: %02X, _bb: %04X, eff: %d\n",_bl,_bb, eff);*/
 
   while (oLen > 0) {
-    w = getb(&bs, 9);
+    x = getb(&bs, 9);
+
+    /* Sanity check */
+    if (x < 0) {
+      return -1;
+    }
+
+    w = x;
 
     /*printf("oLen: %d _bl: %02X, _bb: %04X, w: %04X\n",oLen,_bl,_bb,w);*/
 
     if (w < 0x100) {
-      assert(dst > orgdst);
+      /*assert(dst > orgdst);*/
+      if (orgdst >= dst) {
+        return -1;
+      }
       *--dst = w;
       /*printf("0+[8] -> %02X\n",w);*/
       oLen--;
     } else if (w == 0x13e || w == 0x13f) {
       w <<= 4;
-      w |= getb(&bs, 4);
+      x = getb(&bs, 4);
+      /* Sanity check */
+      if (x < 0) {
+        return -1;
+      }
+      w |= x;
 
       n = (w & 0x1f) + 14;
       oLen -= n;
       while (n-- > 0) {
-        w = getb(&bs, 8);
+        x = getb(&bs, 8);
+        /* Sanity check */
+        if (x < 0) {
+          return -1;
+        }
+        w = x;
 
         /*printf("1+001+1111+[4] -> [8] -> %02X\n",w);*/
-	assert(dst > orgdst);
+	/*assert(dst > orgdst);*/
+        if (orgdst >= dst) {
+          return -1;
+        }
+
         *--dst = w;
       }
     } else {
@@ -162,18 +190,33 @@ static void decompressS404(uint8 *src, uint8 *orgdst,
         if (w & 0x20) {
           /* dist 545 -> */
           w = (w & 0x1f) << (eff - 5);
-          w |= getb(&bs, eff - 5);
+          x = getb(&bs, eff - 5);
+          /* Sanity check */
+          if (x < 0) {
+            return -1;
+          }
+          w |= x;
           w += 544;
           /* printf("1+1+[1]+1+[%d] -> ", eff); */
         } else if (w & 0x30) {
           // dist 1 -> 32
           w = (w & 0x0f) << 1;
-          w |= getb(&bs, 1);
+          x = getb(&bs, 1);
+          /* Sanity check */
+          if (x < 0) {
+            return -1;
+          }
+          w |= x;
           /* printf("1+1+[1]+01+[5] %d %02X %d %04X-> ",n,w, _bl, _bb); */
         } else {
           /* dist 33 -> 544 */
           w = (w & 0x0f) << 5;
-          w |= getb(&bs, 5);
+          x = getb(&bs, 5);
+          /* Sanity check */
+          if (x < 0) {
+            return -1;
+          }
+          w |= x;
           w += 32;
           /* printf("1+1+[1]+00+[9] -> "); */
         }
@@ -184,18 +227,33 @@ static void decompressS404(uint8 *src, uint8 *orgdst,
         if (w & 0x08) {
           /* dist 545 -> */
           w = (w & 0x07) << (eff - 3);
-          w |= getb(&bs, eff - 3);
+          x = getb(&bs, eff - 3);
+          /* Sanity check */
+          if (x < 0) {
+            return -1;
+          }
+          w |= x;
           w += 544;
           /* printf("1+01+[2]+1+[%d] -> ", eff); */
         } else if (w & 0x0c) {
           /* dist 1 -> 32 */
           w = (w & 0x03) << 3;
-          w |= getb(&bs, 3);
+          x = getb(&bs, 3);
+          /* Sanity check */
+          if (x < 0) {
+            return -1;
+          }
+          w |= x;
           /* printf("1+01+[2]+01+[5] -> "); */
         } else {
           /* dist 33 -> 544 */
           w = (w & 0x03) << 7;
-          w |= getb(&bs, 7);
+          x = getb(&bs, 7);
+          /* Sanity check */
+          if (x < 0) {
+            return -1;
+          }
+          w |= x;
           w += 32;
           /* printf("1+01+[2]+00+[9] -> "); */
         }
@@ -205,11 +263,21 @@ static void decompressS404(uint8 *src, uint8 *orgdst,
         
         if (w & 0x01) {
           /* dist 545 -> */
-          w = getb(&bs, eff);
+          x = getb(&bs, eff);
+          /* Sanity check */
+          if (x < 0) {
+            return -1;
+          }
+          w = x;
           w += 544;
           /* printf("1+001+[4]+1+[%d] -> ", eff); */
         } else {
-          w = getb(&bs, 6);
+          x = getb(&bs, 6);
+          /* Sanity check */
+          if (x < 0) {
+            return -1;
+          }
+          w = x;
 
           if (w & 0x20) {
             /* dist 1 -> 32 */
@@ -218,7 +286,12 @@ static void decompressS404(uint8 *src, uint8 *orgdst,
           } else {
             /* dist 33 -> 544 */
             w <<= 4;
-            w |= getb(&bs, 4);
+            x = getb(&bs, 4);
+            /* Sanity check */
+            if (x < 0) {
+              return -1;
+            }
+            w |= x;
 
             w += 32;
             /* printf("1+001+[4]+00+[9] -> "); */
@@ -226,21 +299,37 @@ static void decompressS404(uint8 *src, uint8 *orgdst,
         }
       } else {
         w = (w & 0x1f) << 3;
-	w |= getb(&bs, 3);
+	x = getb(&bs, 3);
+        /* Sanity check */
+        if (x < 0) {
+          return -1;
+        }
+        w |= x;
         n = 23;
 
         while (w == 0xff) {
           n += w;
-          w = getb(&bs, 8);
+          x = getb(&bs, 8);
+          /* Sanity check */
+          if (x < 0) {
+            return -1;
+          }
+          w = x;
         }
         n += w;
 
-        w = getb(&bs, 7);
+        x = getb(&bs, 7);
+        w = x;
 
         if (w & 0x40) {
           /* dist 545 -> */
           w = (w & 0x3f) << (eff - 6);
-          w |= getb(&bs, eff - 6);
+          x = getb(&bs, eff - 6);
+          /* Sanity check */
+          if (x < 0) {
+            return -1;
+          }
+          w |= x;
 
           w += 544;
         } else if (w & 0x20) {
@@ -250,7 +339,12 @@ static void decompressS404(uint8 *src, uint8 *orgdst,
         } else {
           /* dist 33 -> 544; */
           w <<= 4;
-	  w |= getb(&bs, 4);
+	  x = getb(&bs, 4);
+          /* Sanity check */
+          if (x < 0) {
+            return -1;
+          }
+          w |= x;
 
           w += 32;
           /* printf("1+000+[8]+00+[9] -> "); */
@@ -263,16 +357,22 @@ static void decompressS404(uint8 *src, uint8 *orgdst,
       while (n-- > 0) {
         /* printf("Copying: %02X\n",dst[w]); */
 	dst--;
-	assert(dst >= orgdst);
-	assert((dst + w + 1) < (orgdst + dst_length));
+	if (dst < orgdst || (dst + w + 1) >= (orgdst + dst_length))
+            return -1;
 	*dst = dst[w + 1];
       }
     }
   }
+
+  return 0;
 }
 
+static int test_s404(unsigned char *b)
+{
+	return memcmp(b, "S404", 4) == 0;
+}
 
-int decrunch_s404(FILE *in, /* size_t s, */ FILE *out)
+static int decrunch_s404(FILE *in, /* size_t s, */ FILE *out)
 {
   int32 oLen, sLen, pLen;
   uint8 *dst = NULL;
@@ -285,10 +385,17 @@ int decrunch_s404(FILE *in, /* size_t s, */ FILE *out)
   src = buf = malloc(st.st_size);
   if (src == NULL)
     return -1;
-  fread(buf, 1, st.st_size, in);
+  if (fread(buf, 1, st.st_size, in) != st.st_size) {
+    goto error;
+  }
 
   if (checkS404File((uint32 *) src, /*s,*/ &oLen, &pLen, &sLen)) {
     /*fprintf(stderr,"S404 Error: checkS404File() failed..\n");*/
+    goto error;
+  }
+
+  /* Sanity check */
+  if (oLen < 0 || pLen < 0 || pLen + 16 < 0 || pLen + 16 >= st.st_size) {
     goto error;
   }
 
@@ -298,7 +405,9 @@ int decrunch_s404(FILE *in, /* size_t s, */ FILE *out)
   }
 
   /* src + 16 skips S404 header */
-  decompressS404(src + 16, dst, oLen, pLen);
+  if (decompressS404(src + 16, dst, oLen, pLen) < 0) {
+      goto error1;
+  }
 
   if (fwrite(dst, oLen, 1, out) == 0) {
       /*fprintf(stderr,"S404 Error: fwrite() failed..\n");*/
@@ -316,10 +425,7 @@ int decrunch_s404(FILE *in, /* size_t s, */ FILE *out)
   return -1;
 }
 
-
-#if 0
-struct decruncher decruncher_s404 = {
-    .name = "StoneCracker S404",
-    .decrunch = decrunch_s404
+struct depacker libxmp_depacker_s404 = {
+	test_s404,
+	decrunch_s404
 };
-#endif
