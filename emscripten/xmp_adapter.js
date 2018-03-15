@@ -21,7 +21,7 @@
 */
 XMPBackendAdapter = (function(){ var $this = function () { 
 		$this.base.call(this, backend_XMP.Module, 2);	
-		this.once= 0;
+		this.isXmpAllocated= 0;
 	}; 
 	// XMP's sample buffer contains 2-byte integer sample data (i.e. must be rescaled) 
 	// of 2 interleaved channels
@@ -39,7 +39,6 @@ XMPBackendAdapter = (function(){ var $this = function () {
 			var status= this.Module.ccall('playXmpFrame', 'number');
 			if (status != 0) return status;						// means "end song"
 			
-			this.Module.ccall('getXmpFrameInfo', 'number');
 			return this.Module.ccall('getXmpLoopCount', 'number');	// >0 means "end song"
 		},
 		getMaxPlaybackPosition: function() { 
@@ -61,6 +60,7 @@ XMPBackendAdapter = (function(){ var $this = function () {
 		loadMusicData: function(sampleRate, path, filename, data, options) {
 			var buf = this.Module._malloc(data.length);
 			this.Module.HEAPU8.set(data, buf);
+			
 			var ret = this.Module.ccall('loadXmpModule', 'number', ['number', 'number', 'number'], [buf, data.length, sampleRate]);
 			this.Module._free(buf);
 
@@ -74,13 +74,14 @@ XMPBackendAdapter = (function(){ var $this = function () {
 			if (typeof options.timeout != 'undefined') {
 				ScriptNodePlayer.getInstance().setPlaybackTimeout(options.timeout*1000);
 			}
-			return this.Module.ccall('startXmpPlayer', 'number');
+			var trackId= (typeof options.trackId != 'undefined') ? options.trackId : 0;	// only used for hvl			
+			return this.Module.ccall('startXmpPlayer', 'number', ['number'], [trackId]);
 		},				
 		teardown: function() {
-			if(this.once)
+			if(this.isXmpAllocated)
 				this.Module.ccall('endXmp', 'number');	// just in case
-			this.once= 1;
 			this.Module.ccall('initXmp', 'number');
+			this.isXmpAllocated= 1;
 		},
 		getSongInfoMeta: function() {
 			return {title: String,

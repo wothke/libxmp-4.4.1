@@ -1,6 +1,6 @@
 # WebXmp
 
-Copyright (C) 2014 Juergen Wothke
+Copyright (C) 2014-2018 Juergen Wothke
 
 This is a JavaScript/WebAudio plugin of XMP. This plugin is designed to work with my 
 generic WebAudio ScriptProcessor music player (see separate project). 
@@ -12,8 +12,10 @@ addition is the new adapter.c file: It encapsulates all those APIs that interfac
 JavaScript/Web world. 
 
 ## Credits
-This "project" is based on libxmp (4.4.1): http://xmp.sourceforge.net/
-
+This mainly "project" is based on libxmp (4.4.1): http://xmp.sourceforge.net/
+(The "hvl" add-on is based on Xeron/IRIS's "hvl2wav tool" with changes performed by Vitamin/CAIG. 
+I hope that eventually XMP's currently unused "hvl" impl will be usable so that this add-on
+will then no longer be neeeded.)
 
 ## Howto build
 
