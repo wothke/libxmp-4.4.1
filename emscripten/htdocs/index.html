@@ -81,8 +81,13 @@ function doOnTrackReadyToPlay(){
 	ScriptNodePlayer.getInstance().play();
 	songDisplay.redrawSongInfo();
 }
+// depending on the browser/timing the player may be ready before or after (see WASM) init(), i.e.
+// the startup sequence must handle both cases (music can only be started when
+// both the player is ready and init() has been completed..)
+var playerReady= false;		
 function doOnPlayerReady() {
-	if (playerControls) playerControls.playNextSong();
+	playerReady= true;
+	if (playerControls) playerControls.playNextSong(); // playerControls are used to check for init()
 }
 
 function init() {
@@ -128,7 +133,7 @@ function init() {
 	songDisplay= new SongDisplay(new XMPDisplayAccessor((function(){return playerControls.getSongInfo();})), 
 								[0x6565e6], 0, 0.5, (function(){playerControls.animate()}));
 
-	playerControls.playNextSong();
+	if (playerReady) playerControls.playNextSong();	// player was ready before it could trigger the playback
 }
 </script>
 <script type="text/javascript" src="stdlib/analytics.js"></script>
@@ -160,11 +165,14 @@ function init() {
 </details>
 <aside></aside>
 <section>
-  <div id="logo" class="logo">
-	<div id="moz-reflect-logo"><canvas  id="logoCanvas"  width="600" height="250"></canvas></div>
+  <div id="logo">
+		<!-- in new Chrome the SHIT reflections disapear dependig on the canvas height.. what a fucking joke -->
+		<div id="moz-reflect-logo"><canvas  id="logoCanvas"  width="450" height="100"></canvas></div>	
   </div>
-  <div id="spectrum" class="spectrum">
-  	<div id="moz-reflect-spectrum"><canvas id="spectrumCanvas" width="512" height="200"></canvas></div>
+  
+  <div id="spectrum" >
+		<!-- use "hight" greater than 80 and the fucking reflection is gone.. FUCK YOU IDIOTS -->
+		<div id="moz-reflect-spectrum"><canvas id="spectrumCanvas" width="800" height="80"></canvas></div>
   </div>
   <div id="drop" class="drop"><img src="target.gif" width=200 height=200/></div><!--see BasicPlayerControls-->
 </section>
