@@ -104,7 +104,7 @@ int EMSCRIPTEN_KEEPALIVE startXmpPlayer(int trackId) {
 		}
 		hvlSetupTrack(trackId);
 	} else {
-		xmp_start_player(c, sampleRate, 0);
+		if (xmp_start_player(c, sampleRate, 0)) return 1;	// error
 	}
     return 0;
 }
@@ -135,7 +135,7 @@ int EMSCRIPTEN_KEEPALIVE playXmpFrame() {
 		}
 		return ht->ht_SongEndReached;	// 0=OK
 	} else {
-		return xmp_play_frame(c);
+		return  xmp_play_frame(c);
 	}
 }
 
@@ -144,7 +144,7 @@ int EMSCRIPTEN_KEEPALIVE getXmpLoopCount() {
 	if (isHvlMode) {
 		return ht->ht_SongEndReached;	// 1= end song
 	} else {
-		xmp_get_frame_info(c, &fi);		
+		xmp_get_frame_info(c, &fi);
 		return fi.loop_count;
 	}
 }
@@ -180,17 +180,39 @@ int EMSCRIPTEN_KEEPALIVE endXmp() {
 	return 0;
 }
 	
-static char* infoTexts[2];	// to be extended
+static char* infoTexts[3];	// to be extended
+
+#define MAX_TXT 64
+static char module_name_str[MAX_TXT];
+static char module_type_str[MAX_TXT];
+
+static char tracks_str[5];
 
 char** getMusicInfo() __attribute__((noinline));
 char** EMSCRIPTEN_KEEPALIVE getMusicInfo() {
 	if (isHvlMode) {
 		infoTexts[0]= ht->ht_Name;
+		infoTexts[1]= ""; 
+
+		sprintf(tracks_str, "%d", ht->ht_SubsongNr);
+		infoTexts[2]= tracks_str; 
 	} else {
+		// issue: when initially starting FuchsTracker/lowtheme.fuchs, then the type field reports garbage
+		// but after some reloads it changes to "Fuchs Tracker" .. WTF?
+		
 		xmp_get_module_info(c, &mi);
 		
-		infoTexts[0]= mi.mod->name;
-		infoTexts[1]= mi.mod->type;
+		// directly using the "mi.mod->" pointers led to refresh problems.. see FuchsTracker
+		// (author from previous song was sometimes reported)
+		snprintf(module_name_str, "%s", mi.mod->name, MAX_TXT);
+		snprintf(module_type_str, "%s", mi.mod->type, MAX_TXT);
+		
+		
+		infoTexts[0]= module_name_str;
+		infoTexts[1]= module_type_str;
+
+		sprintf(tracks_str, "%d", 0);
+		infoTexts[2]= tracks_str; 
 	}		
     return infoTexts;
 }
@@ -200,9 +222,11 @@ int EMSCRIPTEN_KEEPALIVE getXmpCurrentPosition() {
 	if (isHvlMode) {
 		return ht->ht_PlayingTime;
 	} else {
+		return fi.time;
+		/*
 		struct context_data *ctx = (struct context_data *)c;
 		struct player_data *p = &ctx->p;
-		return p->pos;
+		return p->pos;*/
 	}
 }
 
@@ -227,8 +251,11 @@ int EMSCRIPTEN_KEEPALIVE getXmpMaxPosition() {
 	if (isHvlMode) {
 		return total_frames;
 	} else {
+		return fi.total_time;
+		/*
 		struct context_data *ctx = (struct context_data *)c;
 		struct module_data *m = &ctx->m;
 		return  m->mod.len;
+		*/
 	}
 }

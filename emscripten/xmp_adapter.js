@@ -85,17 +85,20 @@ XMPBackendAdapter = (function(){ var $this = function () {
 		},
 		getSongInfoMeta: function() {
 			return {title: String,
-					player: String 
+					player: String,
+					tracks: String 
 					};
 		},
 		updateSongInfo: function(filename, result) {
 		// get song infos (so far only use some top level module infos)
-			var numAttr= 2;
+			var numAttr= 3;
 			var ret = this.Module.ccall('getMusicInfo', 'number');
 			
 			var array = this.Module.HEAP32.subarray(ret>>2, (ret>>2)+numAttr);
 			result.title= this.Module.Pointer_stringify(array[0]);
+			if (!result.title.length || (result.title ==="<unnamed>")) result.title= filename.replace(/^.*[\\\/]/, '').split('.').slice(0, -1).join('.');
 			result.player= this.Module.Pointer_stringify(array[1]);
+			result.tracks= this.Module.Pointer_stringify(array[2]);
 		}
 	});	return $this; })();
 	
