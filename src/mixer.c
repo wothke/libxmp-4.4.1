@@ -522,6 +522,11 @@ void libxmp_mixer_softmixer(struct context_data *ctx)
 					}
 
 					if (mix_fn != NULL) {
+						// XXX this seems to be where the voice's contribution is added to the output
+						// i.e. this is where the "scope" streams might be recorded... (actual impls in 
+						// mix_all.c - see MIXER macros.. i.e.  MIX_* defined must be extended to store 
+						// "scope" data)
+						
 						mix_fn(vi, buf_pos, samples,
 							vol_l >> 8, vol_r >> 8, step * (1 << SMIX_SHIFT), rsize, delta_l, delta_r);
 					}
